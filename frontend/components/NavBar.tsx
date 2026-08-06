@@ -1,0 +1,40 @@
+"use client";
+
+import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { LineChart, PiggyBank, Receipt, RefreshCw } from "lucide-react";
+
+const LINKS = [
+  { href: "/", label: "Ledger", icon: Receipt },
+  { href: "/budgets", label: "Budgets", icon: PiggyBank },
+  { href: "/subscriptions", label: "Subscriptions", icon: RefreshCw },
+  { href: "/forecast", label: "Forecast", icon: LineChart },
+];
+
+export default function NavBar() {
+  const pathname = usePathname();
+
+  return (
+    <nav className="border-b border-slate-200 bg-white">
+      <div className="mx-auto flex max-w-7xl items-center gap-1 px-6">
+        {LINKS.map(({ href, label, icon: Icon }) => {
+          const active = pathname === href;
+          return (
+            <Link
+              key={href}
+              href={href}
+              className={`-mb-px flex items-center gap-2 border-b-2 px-3 py-3 text-sm font-medium transition ${
+                active
+                  ? "border-slate-900 text-slate-900"
+                  : "border-transparent text-slate-500 hover:text-slate-800"
+              }`}
+            >
+              <Icon className="h-4 w-4" />
+              {label}
+            </Link>
+          );
+        })}
+      </div>
+    </nav>
+  );
+}

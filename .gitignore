@@ -1,0 +1,13 @@
+.env
+*.pyc
+__pycache__/
+.venv/
+venv/
+node_modules/
+.next/
+out/
+.DS_Store
+*.log
+.env.local
+*.tsbuildinfo
+.claude/settings.local.json
