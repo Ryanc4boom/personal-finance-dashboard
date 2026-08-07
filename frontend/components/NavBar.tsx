@@ -8,6 +8,7 @@ import {
   Receipt,
   RefreshCw,
   Scale,
+  Search,
   Target,
   TrendingUp,
 } from "lucide-react";
@@ -20,6 +21,7 @@ const LINKS = [
   { href: "/investments", label: "Investments", icon: TrendingUp },
   { href: "/net-worth", label: "Net Worth", icon: Scale },
   { href: "/goals", label: "Goals", icon: Target },
+  { href: "/research", label: "Research", icon: Search },
 ];
 
 export default function NavBar() {
@@ -29,7 +31,9 @@ export default function NavBar() {
     <nav className="border-b border-slate-200 bg-white">
       <div className="mx-auto flex max-w-7xl items-center gap-1 px-6">
         {LINKS.map(({ href, label, icon: Icon }) => {
-          const active = pathname === href;
+          // Prefix match so /research/NVDA keeps the Research tab lit.
+          const active =
+            href === "/" ? pathname === href : pathname.startsWith(href);
           return (
             <Link
               key={href}

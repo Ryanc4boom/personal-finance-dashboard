@@ -9,5 +9,9 @@ pydantic>=2.10.4,<3.0
 pydantic-settings>=2.7.0,<3.0
 plaid-python>=27.0.0,<39.0
 redis>=5.2.1,<7.0
+# SEC EDGAR + market data transport. httpx over requests for its explicit
+# per-phase Timeout object, which matters when one research request fans out to
+# several 10-20MB filing downloads that must not share one flat deadline.
+httpx>=0.28.1,<0.29
 cryptography>=44.0.0
 python-dotenv>=1.0.1

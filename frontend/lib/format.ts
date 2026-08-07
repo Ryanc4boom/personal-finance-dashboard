@@ -20,13 +20,32 @@ export function formatSignedCents(cents: number): string {
   return `${cents > 0 ? "+" : "-"}${formatted}`;
 }
 
-/** Axis-sized money: "$1.2k", "-$840". Never for a figure read as an exact total. */
+/**
+ * Axis-sized money: "$1.2k", "-$840", "$4.3T". Never for a figure read as an
+ * exact total.
+ *
+ * The scale runs all the way to trillions because the same helper labels both a
+ * grocery budget and NVIDIA's revenue. Stopping at thousands renders the latter
+ * as "$130488660k", which is a longer string than the number it abbreviates.
+ */
+const COMPACT_UNITS = [
+  { at: 1e12, suffix: "T" },
+  { at: 1e9, suffix: "B" },
+  { at: 1e6, suffix: "M" },
+  { at: 1e3, suffix: "k" },
+] as const;
+
 export function formatCentsCompact(cents: number): string {
   const dollars = cents / 100;
   const sign = dollars < 0 ? "-" : "";
   const abs = Math.abs(dollars);
-  if (abs >= 1000) {
-    return `${sign}$${(abs / 1000).toFixed(abs >= 10000 ? 0 : 1)}k`;
+  for (const { at, suffix } of COMPACT_UNITS) {
+    if (abs >= at) {
+      const scaled = abs / at;
+      // One decimal below 10, none above: "$4.3T" carries the same information
+      // as "$4.31T" at a tick label's size, but "$130B" and "$131B" do not.
+      return `${sign}$${scaled.toFixed(scaled >= 10 ? 0 : 1)}${suffix}`;
+    }
   }
   return `${sign}$${Math.round(abs)}`;
 }

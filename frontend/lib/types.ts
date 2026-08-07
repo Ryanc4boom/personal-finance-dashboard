@@ -694,3 +694,147 @@ export interface GoalCreate {
 
 /** Every field optional; `linked_account_ids` replaces the whole set. */
 export type GoalUpdate = Partial<GoalCreate> & { is_archived?: boolean };
+
+// --------------------------------------------------------------------------- //
+// Phase 5 — SEC research engine
+// --------------------------------------------------------------------------- //
+
+/**
+ * `UNKNOWN` is a first-class verdict, not an error. The engine refuses to score
+ * a check whose input the filer never tagged, so the UI has to render four
+ * states rather than a pass/fail boolean plus a null.
+ */
+export type CheckStatus = "PASS" | "WARN" | "FAIL" | "UNKNOWN";
+
+/** A quoted passage from the filing, so a heuristic verdict can be audited. */
+export interface Evidence {
+  text: string;
+  matched: string;
+}
+
+export interface ResearchCheck {
+  key: string;
+  label: string;
+  status: CheckStatus;
+  /**
+   * Pre-rendered by the backend, which knows whether the figure is a
+   * percentage, a multiple, a money pair or the words "Negative equity".
+   * Render it verbatim; deriving it here would fork the framework's judgment
+   * into a second language.
+   */
+  value_display: string;
+  target_display: string;
+  detail: string;
+  value_bps: number | null;
+  value_cents: number | null;
+}
+
+export interface ResearchStage {
+  key: string;
+  number: number;
+  title: string;
+  description: string;
+  status: CheckStatus;
+  checks: ResearchCheck[];
+  counts: Record<CheckStatus, number>;
+}
+
+export interface AnnualRow {
+  fiscal_label: string;
+  period_end: string;
+  revenue_cents: number | null;
+  gross_profit_cents: number | null;
+  gross_margin_bps: number | null;
+  operating_income_cents: number | null;
+  operating_margin_bps: number | null;
+  net_income_cents: number | null;
+  net_margin_bps: number | null;
+  diluted_shares: number | null;
+  /** String-encoded decimal — see the note on `quantity` in the portfolio types. */
+  diluted_eps: string | null;
+  operating_cash_flow_cents: number | null;
+  capex_cents: number | null;
+  free_cash_flow_cents: number | null;
+  cash_and_sti_cents: number | null;
+  total_debt_cents: number | null;
+  long_term_debt_cents: number | null;
+  equity_cents: number | null;
+  total_liabilities_cents: number | null;
+  interest_expense_cents: number | null;
+}
+
+export interface BusinessModel {
+  classification: "RECURRING" | "TRANSACTIONAL" | "MIXED" | "UNKNOWN";
+  confidence: "HIGH" | "MEDIUM" | "LOW";
+  recurring_score: number;
+  transactional_score: number;
+  evidence: Evidence[];
+}
+
+export interface CustomerConcentration {
+  status: "CONCENTRATED" | "DIVERSIFIED" | "UNKNOWN";
+  confidence: "HIGH" | "MEDIUM" | "LOW";
+  max_customer_bps: number | null;
+  threshold_bps: number;
+  evidence: Evidence[];
+}
+
+export interface InsiderOwnership {
+  status: "FOUND" | "BELOW_ONE_PERCENT" | "UNKNOWN";
+  group_bps: number | null;
+  group_person_count: number | null;
+  confidence: "HIGH" | "MEDIUM" | "LOW";
+  evidence: Evidence[];
+}
+
+export interface SharePrice {
+  price_cents: number;
+  source: "OVERRIDE" | "PORTFOLIO" | "FINNHUB";
+  as_of: string | null;
+  /** A stored close, not a live quote — the UI dates the valuation instead of
+   * implying it is current. */
+  is_stale_close: boolean;
+}
+
+export interface SourceFiling {
+  form: string;
+  filed: string;
+  period: string | null;
+  document_url: string;
+  index_url: string;
+}
+
+export interface ResearchReport {
+  ticker: string;
+  cik: number;
+  company_name: string;
+  generated_at: string;
+  stages: ResearchStage[];
+  annuals: AnnualRow[];
+  business_model: BusinessModel | null;
+  concentration: CustomerConcentration | null;
+  insider: InsiderOwnership | null;
+  price: SharePrice | null;
+  market_cap_cents: number | null;
+  /** String-encoded decimals. */
+  pe_ratio: string | null;
+  peg_ratio: string | null;
+  eps_growth_bps: number | null;
+  sources: SourceFiling[];
+  stitched_concepts: string[];
+  /** Caveats to read before trusting a number: split restatements, unreadable
+   * sections, sector conventions, stale prices. */
+  notes: string[];
+  summary_counts: Record<CheckStatus, number>;
+}
+
+export interface TickerMatch {
+  ticker: string;
+  cik: number;
+  name: string;
+}
+
+export interface TickerSearchResult {
+  query: string;
+  results: TickerMatch[];
+}

@@ -20,6 +20,7 @@ import type {
   RecategorizeResult,
   RecurringStream,
   RecurringStreamUpdate,
+  ResearchReport,
   Rule,
   RuleApplyResult,
   RuleCreate,
@@ -27,6 +28,7 @@ import type {
   StreamStatus,
   SubscriptionMetrics,
   SuggestionsResponse,
+  TickerSearchResult,
   Transaction,
   TransactionDirection,
   TransactionPage,
@@ -317,4 +319,35 @@ export function updateGoal(id: string, patch: GoalUpdate): Promise<Goal> {
 
 export function deleteGoal(id: string): Promise<void> {
   return request<void>(`/api/v1/goals/${id}`, { method: "DELETE" });
+}
+
+// --------------------------------------------------------------------------- //
+// Phase 5 — SEC research engine
+// --------------------------------------------------------------------------- //
+
+export function searchTickers(
+  query: string,
+  limit = 8,
+): Promise<TickerSearchResult> {
+  return request<TickerSearchResult>(
+    `/api/v1/research/search?q=${encodeURIComponent(query)}&limit=${limit}`,
+  );
+}
+
+/**
+ * The full four-stage scorecard. Slow on a cold cache — it downloads a 10-K and
+ * a proxy from EDGAR under SEC's rate limit — so callers should show a loading
+ * state rather than assume this returns in a frame.
+ *
+ * `priceCents` overrides the resolved share price, which is what makes the
+ * valuation stage answerable with no market-data key configured.
+ */
+export function getResearchReport(
+  ticker: string,
+  priceCents?: number,
+): Promise<ResearchReport> {
+  const query = priceCents ? `?price_cents=${priceCents}` : "";
+  return request<ResearchReport>(
+    `/api/v1/research/${encodeURIComponent(ticker)}${query}`,
+  );
 }
