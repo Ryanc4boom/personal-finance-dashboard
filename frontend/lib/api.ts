@@ -1,12 +1,22 @@
 import type {
+  AccountBreakdownRow,
   AccountSummary,
+  Allocation,
   ApplySuggestionsResult,
+  BackfillResult,
   BudgetReport,
   CategoryTree,
   DetectionResult,
   Forecast,
   ForecastHorizon,
+  Goal,
+  GoalCreate,
+  GoalUpdate,
+  GoalsReport,
   LedgerFilters,
+  NetWorthHistory,
+  NetWorthRange,
+  Portfolio,
   RecategorizeResult,
   RecurringStream,
   RecurringStreamUpdate,
@@ -248,4 +258,63 @@ export function getForecast(options?: {
     params.set("include_variable", String(options.includeVariable));
   }
   return request<Forecast>(`/api/v1/forecast?${params}`);
+}
+
+// --------------------------------------------------------------------------- //
+// Phase 4 — investments, net worth, goals
+// --------------------------------------------------------------------------- //
+
+export function getPortfolio(asOf?: string): Promise<Portfolio> {
+  const query = asOf ? `?as_of=${asOf}` : "";
+  return request<Portfolio>(`/api/v1/investments/holdings${query}`);
+}
+
+export function getAllocation(asOf?: string): Promise<Allocation> {
+  const query = asOf ? `?as_of=${asOf}` : "";
+  return request<Allocation>(`/api/v1/investments/allocation${query}`);
+}
+
+export function getNetWorthHistory(
+  range: NetWorthRange = "1Y",
+): Promise<NetWorthHistory> {
+  return request<NetWorthHistory>(`/api/v1/net-worth/history?range=${range}`);
+}
+
+export function getNetWorthAccounts(): Promise<AccountBreakdownRow[]> {
+  return request<AccountBreakdownRow[]>("/api/v1/net-worth/accounts");
+}
+
+/**
+ * Recompute and persist historical snapshots. Explicit on purpose — reading the
+ * chart never triggers it, so the write cost is always something the user asked
+ * for rather than a side effect of a page load.
+ */
+export function backfillNetWorth(): Promise<BackfillResult> {
+  return request<BackfillResult>("/api/v1/net-worth/backfill", {
+    method: "POST",
+  });
+}
+
+export function getGoals(includeArchived = false): Promise<GoalsReport> {
+  return request<GoalsReport>(
+    `/api/v1/goals?include_archived=${includeArchived}`,
+  );
+}
+
+export function createGoal(payload: GoalCreate): Promise<Goal> {
+  return request<Goal>("/api/v1/goals", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateGoal(id: string, patch: GoalUpdate): Promise<Goal> {
+  return request<Goal>(`/api/v1/goals/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+}
+
+export function deleteGoal(id: string): Promise<void> {
+  return request<void>(`/api/v1/goals/${id}`, { method: "DELETE" });
 }

@@ -2,13 +2,24 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LineChart, PiggyBank, Receipt, RefreshCw } from "lucide-react";
+import {
+  LineChart,
+  PiggyBank,
+  Receipt,
+  RefreshCw,
+  Scale,
+  Target,
+  TrendingUp,
+} from "lucide-react";
 
 const LINKS = [
   { href: "/", label: "Ledger", icon: Receipt },
   { href: "/budgets", label: "Budgets", icon: PiggyBank },
   { href: "/subscriptions", label: "Subscriptions", icon: RefreshCw },
   { href: "/forecast", label: "Forecast", icon: LineChart },
+  { href: "/investments", label: "Investments", icon: TrendingUp },
+  { href: "/net-worth", label: "Net Worth", icon: Scale },
+  { href: "/goals", label: "Goals", icon: Target },
 ];
 
 export default function NavBar() {
@@ -23,13 +34,13 @@ export default function NavBar() {
             <Link
               key={href}
               href={href}
-              className={`-mb-px flex items-center gap-2 border-b-2 px-3 py-3 text-sm font-medium transition ${
+              className={`-mb-px flex items-center gap-2 whitespace-nowrap border-b-2 px-3 py-3 text-sm font-medium transition ${
                 active
                   ? "border-slate-900 text-slate-900"
                   : "border-transparent text-slate-500 hover:text-slate-800"
               }`}
             >
-              <Icon className="h-4 w-4" />
+              <Icon className="h-4 w-4 shrink-0" />
               {label}
             </Link>
           );

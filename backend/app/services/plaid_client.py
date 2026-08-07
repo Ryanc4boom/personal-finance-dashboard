@@ -4,6 +4,7 @@ Keeps SDK model construction out of routers/services so the rest of the codebase
 deals in plain dicts.
 """
 
+from datetime import date
 from functools import lru_cache
 
 import plaid
@@ -12,6 +13,13 @@ from plaid.model.country_code import CountryCode
 from plaid.model.institutions_get_by_id_request import InstitutionsGetByIdRequest
 from plaid.model.institutions_get_by_id_request_options import (
     InstitutionsGetByIdRequestOptions,
+)
+from plaid.model.investments_holdings_get_request import InvestmentsHoldingsGetRequest
+from plaid.model.investments_transactions_get_request import (
+    InvestmentsTransactionsGetRequest,
+)
+from plaid.model.investments_transactions_get_request_options import (
+    InvestmentsTransactionsGetRequestOptions,
 )
 from plaid.model.item_get_request import ItemGetRequest
 from plaid.model.item_public_token_exchange_request import (
@@ -93,3 +101,42 @@ def transactions_sync(access_token: str, cursor: str | None, count: int = 500) -
     if cursor:
         kwargs["cursor"] = cursor
     return jsonable(get_client().transactions_sync(TransactionsSyncRequest(**kwargs)).to_dict())
+
+
+# --------------------------------------------------------------------------- #
+# Phase 4 — investments
+# --------------------------------------------------------------------------- #
+
+def investments_holdings_get(access_token: str) -> dict:
+    """Current positions across every investment account on the Item.
+
+    Unlike `/transactions/sync` there is no cursor: this endpoint always returns
+    the full current picture, which is exactly what a dated snapshot wants.
+    Returns `{accounts, holdings, securities}` — securities arrive alongside the
+    positions rather than needing a second lookup.
+    """
+    request = InvestmentsHoldingsGetRequest(access_token=access_token)
+    return jsonable(get_client().investments_holdings_get(request).to_dict())
+
+
+def investments_transactions_get(
+    access_token: str,
+    start_date: date,
+    end_date: date,
+    count: int = 500,
+    offset: int = 0,
+) -> dict:
+    """Trades and distributions in a date window.
+
+    Offset-paginated rather than cursor-based, so callers must loop until
+    `len(investment_transactions) >= total_investment_transactions`; see
+    services/ingestion.sync_investments, which does exactly that. Plaid caps
+    `count` at 500.
+    """
+    request = InvestmentsTransactionsGetRequest(
+        access_token=access_token,
+        start_date=start_date,
+        end_date=end_date,
+        options=InvestmentsTransactionsGetRequestOptions(count=count, offset=offset),
+    )
+    return jsonable(get_client().investments_transactions_get(request).to_dict())

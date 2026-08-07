@@ -9,6 +9,9 @@ from app.routers import (
     budgets,
     categories,
     forecast,
+    goals,
+    investments,
+    net_worth,
     plaid,
     recurring,
     rules,
@@ -22,9 +25,9 @@ app = FastAPI(
     title="Budgeting Platform API",
     version="0.1.0",
     description=(
-        "Phase 3 — recurring transaction detection, subscription tracking, and "
-        "rolling cash flow forecasting, on top of the Phase 2 categorisation, "
-        "transfer pairing and budget pacing engines."
+        "Phase 4 — investment holdings, portfolio analytics, net worth history "
+        "and financial goals, on top of the Phase 3 recurring detection and cash "
+        "flow forecasting and the Phase 2 categorisation and budget engines."
     ),
 )
 
@@ -45,6 +48,9 @@ app.include_router(budgets.router)
 app.include_router(transfers.router)
 app.include_router(recurring.router)
 app.include_router(forecast.router)
+app.include_router(investments.router)
+app.include_router(net_worth.router)
+app.include_router(goals.router)
 
 
 @app.get("/health", tags=["meta"])

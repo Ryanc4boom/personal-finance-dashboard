@@ -430,3 +430,267 @@ export interface Forecast {
 
 export const FORECAST_HORIZONS = [30, 60, 90] as const;
 export type ForecastHorizon = (typeof FORECAST_HORIZONS)[number];
+
+// --------------------------------------------------------------------------- //
+// Phase 4 — investments, net worth, goals
+// --------------------------------------------------------------------------- //
+
+export const ASSET_CLASSES = [
+  "US_EQUITY",
+  "INTERNATIONAL_EQUITY",
+  "FIXED_INCOME",
+  "CRYPTO",
+  "REAL_ESTATE",
+  "CASH",
+] as const;
+export type AssetClass = (typeof ASSET_CLASSES)[number];
+
+export type SecurityType =
+  | "EQUITY"
+  | "ETF"
+  | "MUTUAL_FUND"
+  | "CRYPTO"
+  | "FIXED_INCOME"
+  | "CASH_EQUIVALENT";
+
+export interface PositionAccount {
+  account_id: string;
+  account_name: string;
+  account_mask: string | null;
+  account_subtype: string | null;
+  /** Decimal string, never a number — see the note on Position.quantity. */
+  quantity: string;
+  value_cents: number;
+  cost_basis_cents: number | null;
+  as_of_date: string;
+}
+
+export interface Position {
+  security_id: string;
+  ticker_symbol: string | null;
+  name: string;
+  type: SecurityType;
+  asset_class: AssetClass;
+  is_cash_equivalent: boolean;
+  /**
+   * A decimal string. Share counts carry up to eight places and a JSON number
+   * is a double, so parsing this into one would silently round crypto and
+   * fractional-share positions.
+   */
+  quantity: string;
+  price_cents: number | null;
+  price_as_of: string | null;
+  value_cents: number;
+  /** Null means the custodian never reported a basis — not zero. */
+  cost_basis_cents: number | null;
+  gain_cents: number | null;
+  gain_bps: number | null;
+  day_change_cents: number | null;
+  weight_bps: number;
+  accounts: PositionAccount[];
+}
+
+export interface AllocationSlice {
+  asset_class: AssetClass;
+  value_cents: number;
+  /** Apportioned so the slices sum to exactly 10000. */
+  weight_bps: number;
+  position_count: number;
+}
+
+export interface AccountAllocation {
+  account_id: string;
+  name: string;
+  mask: string | null;
+  subtype: string | null;
+  value_cents: number;
+  cost_basis_cents: number | null;
+  gain_cents: number | null;
+  gain_bps: number | null;
+  day_change_cents: number | null;
+  weight_bps: number;
+  position_count: number;
+  as_of_date: string | null;
+  by_asset_class: AllocationSlice[];
+}
+
+export interface PortfolioSummary {
+  as_of_date: string | null;
+  total_value_cents: number;
+  total_cost_basis_cents: number;
+  /** Market value of only the positions that reported a basis. */
+  cost_basis_value_cents: number;
+  unrealized_gain_cents: number;
+  unrealized_gain_bps: number | null;
+  cost_basis_coverage_bps: number;
+  day_change_cents: number;
+  day_change_bps: number | null;
+  day_change_missing_count: number;
+  cash_value_cents: number;
+  invested_value_cents: number;
+  position_count: number;
+  account_count: number;
+}
+
+export interface Portfolio {
+  summary: PortfolioSummary;
+  positions: Position[];
+  by_asset_class: AllocationSlice[];
+  by_account: AccountAllocation[];
+}
+
+export interface Allocation {
+  as_of_date: string | null;
+  total_value_cents: number;
+  by_asset_class: AllocationSlice[];
+  by_account: AccountAllocation[];
+}
+
+export const NET_WORTH_RANGES = ["1M", "3M", "6M", "1Y", "ALL"] as const;
+export type NetWorthRange = (typeof NET_WORTH_RANGES)[number];
+
+export interface NetWorthBreakdown {
+  cash_cents?: number;
+  investments_cents?: number;
+  other_assets_cents?: number;
+  credit_cents?: number;
+  loans_cents?: number;
+}
+
+export interface NetWorthPoint {
+  date: string;
+  total_assets_cents: number;
+  /** Positive magnitude; net worth is assets minus this. */
+  total_liabilities_cents: number;
+  net_worth_cents: number;
+  source: "ACTUAL" | "RECONSTRUCTED";
+  breakdown: NetWorthBreakdown;
+}
+
+export interface NetWorthChange {
+  start_cents: number;
+  end_cents: number;
+  delta_cents: number;
+  /** Withheld when the starting net worth was zero or negative. */
+  delta_bps: number | null;
+}
+
+export interface AccountBreakdownRow {
+  account_id: string;
+  name: string;
+  mask: string | null;
+  type: string;
+  subtype: string | null;
+  bucket: "cash" | "investments" | "credit" | "loans" | "other";
+  /** Signed: assets positive, liabilities negative. */
+  balance_cents: number;
+  is_liability: boolean;
+}
+
+export interface NetWorthHistory {
+  range_key: NetWorthRange;
+  start_date: string | null;
+  end_date: string | null;
+  current_assets_cents: number;
+  current_liabilities_cents: number;
+  current_net_worth_cents: number;
+  change: NetWorthChange | null;
+  points: NetWorthPoint[];
+  accounts: AccountBreakdownRow[];
+  breakdown: NetWorthBreakdown;
+}
+
+export interface BackfillResult {
+  start_date: string | null;
+  end_date: string | null;
+  days_computed: number;
+  snapshots_created: number;
+  snapshots_updated: number;
+  accounts_considered: number;
+  warnings: string[];
+}
+
+export const GOAL_CATEGORIES = [
+  "EMERGENCY_FUND",
+  "HOUSE_DOWN_PAYMENT",
+  "FIRE",
+  "CAR_PURCHASE",
+  "CUSTOM",
+] as const;
+export type GoalCategory = (typeof GOAL_CATEGORIES)[number];
+
+export type GoalStatus =
+  | "ON_TRACK"
+  | "AT_RISK"
+  | "OFF_TRACK"
+  | "ACHIEVED"
+  | "NO_DEADLINE";
+
+export interface GoalAccountRef {
+  account_id: string;
+  name: string;
+  mask: string | null;
+  type: string;
+  subtype: string | null;
+  balance_cents: number;
+  is_liability: boolean;
+}
+
+export interface Goal {
+  id: string;
+  name: string;
+  category: GoalCategory;
+  target_amount_cents: number;
+  current_amount_cents: number;
+  remaining_cents: number;
+  /** Clamped to 0..10000 for the bar. */
+  progress_bps: number;
+  /** Unclamped, for the label. */
+  raw_progress_bps: number;
+  target_date: string | null;
+  days_remaining: number | null;
+  months_remaining: number | null;
+  required_monthly_cents: number | null;
+  observed_monthly_cents: number | null;
+  /** False when the rate came from the stated plan, not measured movement. */
+  observed_is_measured: boolean;
+  projected_completion_date: string | null;
+  projected_vs_target_days: number | null;
+  status: GoalStatus;
+  is_achieved: boolean;
+  is_archived: boolean;
+  monthly_contribution_cents: number | null;
+  notes: string | null;
+  linked_account_ids: string[];
+  linked_accounts: GoalAccountRef[];
+}
+
+export interface GoalsSummary {
+  goal_count: number;
+  achieved_count: number;
+  off_track_count: number;
+  total_target_cents: number;
+  total_current_cents: number;
+  total_remaining_cents: number;
+  total_progress_bps: number;
+  total_required_monthly_cents: number;
+}
+
+export interface GoalsReport {
+  summary: GoalsSummary;
+  goals: Goal[];
+}
+
+export interface GoalCreate {
+  name: string;
+  category: GoalCategory;
+  target_amount_cents: number;
+  current_amount_cents?: number;
+  target_date?: string | null;
+  monthly_contribution_cents?: number | null;
+  notes?: string | null;
+  linked_account_ids?: string[];
+}
+
+/** Every field optional; `linked_account_ids` replaces the whole set. */
+export type GoalUpdate = Partial<GoalCreate> & { is_archived?: boolean };

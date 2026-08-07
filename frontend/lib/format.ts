@@ -76,3 +76,22 @@ export function titleCase(value: string | null): string {
     .toLowerCase()
     .replace(/\b\w/g, (c) => c.toUpperCase());
 }
+
+/** Basis points as a percentage: 3765 -> "37.65%". */
+export function formatBps(
+  bps: number | null | undefined,
+  digits = 1,
+): string {
+  if (bps === null || bps === undefined) return "—";
+  return `${(bps / 100).toFixed(digits)}%`;
+}
+
+/** Signed form for a return figure: "+37.7%" / "-4.2%". */
+export function formatSignedBps(
+  bps: number | null | undefined,
+  digits = 1,
+): string {
+  if (bps === null || bps === undefined) return "—";
+  const sign = bps > 0 ? "+" : bps < 0 ? "-" : "";
+  return `${sign}${(Math.abs(bps) / 100).toFixed(digits)}%`;
+}

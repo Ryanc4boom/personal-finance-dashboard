@@ -1,13 +1,47 @@
+# ---- Secrets & environment ----
+# Ignore every .env variant, then re-admit the checked-in templates.
+# The broad glob matters more than the specific ones: it is the files nobody
+# thought to list (.env.production, backend/.env.staging) that leak.
 .env
+.env.*
+!.env.example
+!.env.*.example
+
+# ---- Python ----
 *.pyc
+*.pyo
 __pycache__/
 .venv/
 venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.coverage
+htmlcov/
+
+# ---- Node / Next.js ----
 node_modules/
 .next/
 out/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+
+# ---- Local data ----
+# Postgres runs in docker, but stray dumps and any sqlite scratch DB are
+# real account data, not code.
+*.db
+*.sqlite
+*.sqlite3
+*.dump
+*.sql.gz
+pgdata/
+
+# ---- Editor / OS / tooling ----
 .DS_Store
 *.log
-.env.local
-*.tsbuildinfo
+.idea/
+.vscode/
 .claude/settings.local.json

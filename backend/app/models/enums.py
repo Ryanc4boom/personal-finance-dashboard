@@ -127,6 +127,95 @@ class StatusSource(str, enum.Enum):
     USER = "USER"
 
 
+class SecurityType(str, enum.Enum):
+    """What kind of instrument a security is.
+
+    This is the *instrument*, not the exposure — see `AssetClass`. A total-market
+    ETF and a corporate-bond ETF are both ETF here and belong to different asset
+    classes, which is precisely why the two axes are separate columns.
+    """
+
+    EQUITY = "EQUITY"
+    ETF = "ETF"
+    MUTUAL_FUND = "MUTUAL_FUND"
+    CRYPTO = "CRYPTO"
+    FIXED_INCOME = "FIXED_INCOME"
+    CASH_EQUIVALENT = "CASH_EQUIVALENT"
+
+
+class AssetClass(str, enum.Enum):
+    """What a security is *exposed to*. The axis allocation is reported on.
+
+    Deliberately not derivable from `SecurityType` alone: an ETF may hold US
+    equity, international equity, bonds or REITs, so mapping instrument type
+    straight onto exposure would file every fund into one bucket and report a
+    diversified portfolio as "100% ETF" — a chart that answers the wrong
+    question. `services/investment.classify_asset_class` infers this on sync;
+    `security.asset_class_locked` protects a user's correction from the next
+    run, the same invariant Phase 2 gave categories and Phase 3 gave status.
+    """
+
+    US_EQUITY = "US_EQUITY"
+    INTERNATIONAL_EQUITY = "INTERNATIONAL_EQUITY"
+    FIXED_INCOME = "FIXED_INCOME"
+    CRYPTO = "CRYPTO"
+    REAL_ESTATE = "REAL_ESTATE"
+    CASH = "CASH"
+
+
+class InvestmentTransactionType(str, enum.Enum):
+    BUY = "BUY"
+    SELL = "SELL"
+    DIVIDEND = "DIVIDEND"
+    INTEREST = "INTEREST"
+    FEE = "FEE"
+    TRANSFER = "TRANSFER"
+
+
+# Movements that cross the account boundary rather than rearranging what is
+# already inside it. A BUY converts cash into shares and leaves the account's
+# total value unchanged; a TRANSFER changes it. Separating contribution from
+# market return depends entirely on this distinction.
+EXTERNAL_FLOW_TYPES = {
+    InvestmentTransactionType.TRANSFER.value,
+}
+
+
+class GoalCategory(str, enum.Enum):
+    EMERGENCY_FUND = "EMERGENCY_FUND"
+    HOUSE_DOWN_PAYMENT = "HOUSE_DOWN_PAYMENT"
+    FIRE = "FIRE"
+    CAR_PURCHASE = "CAR_PURCHASE"
+    CUSTOM = "CUSTOM"
+
+
+class GoalStatus(str, enum.Enum):
+    """Where a goal stands against its own deadline.
+
+    `AT_RISK` vs `OFF_TRACK` draws the same line budgets draw between AT_RISK
+    and OVER_PACING: one is a nudge, the other says the target date is not
+    reachable at the current savings rate.
+    """
+
+    ON_TRACK = "ON_TRACK"
+    AT_RISK = "AT_RISK"
+    OFF_TRACK = "OFF_TRACK"
+    ACHIEVED = "ACHIEVED"
+    # No target date, so there is no pace to be behind.
+    NO_DEADLINE = "NO_DEADLINE"
+
+
+# Account types that count against net worth rather than towards it.
+# services/net_worth.signed_balance_cents derives the sign from the account type
+# rather than trusting the stored value: Plaid reports a card balance as a
+# positive amount owed, while seeds/demo.py stores it negative, so the raw sign
+# is not a reliable input.
+LIABILITY_ACCOUNT_TYPES = {
+    AccountType.credit.value,
+    AccountType.loan.value,
+}
+
+
 class PacingStatus(str, enum.Enum):
     """Where a category is heading, not just where it is.
 
