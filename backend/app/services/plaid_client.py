@@ -7,6 +7,7 @@ deals in plain dicts.
 from datetime import date
 from functools import lru_cache
 
+import certifi
 import plaid
 from plaid.api import plaid_api
 from plaid.model.country_code import CountryCode
@@ -58,6 +59,21 @@ def get_client() -> plaid_api.PlaidApi:
             "secret": settings.plaid_secret,
         },
     )
+    # Verify against certifi's bundle rather than whatever the interpreter
+    # considers its default trust store.
+    #
+    # The SDK's urllib3 transport falls back to `ssl.create_default_context()`,
+    # which on a framework/pyenv build of Python that never ran the
+    # "Install Certificates" step contains zero CA certificates — this venv's
+    # context reports `x509_ca: 0`. Every Plaid call then dies with
+    # CERTIFICATE_VERIFY_FAILED, which reads exactly like bad credentials and
+    # sends you to the dashboard to re-copy keys that were never wrong.
+    #
+    # httpx is unaffected because it points at certifi explicitly, so the SEC
+    # and Finnhub calls in this same process succeed while Plaid fails. Naming
+    # the bundle here removes the interpreter's setup from the equation instead
+    # of relying on an SSL_CERT_FILE export that lives outside the repo.
+    configuration.ssl_ca_cert = certifi.where()
     return plaid_api.PlaidApi(plaid.ApiClient(configuration))
 
 

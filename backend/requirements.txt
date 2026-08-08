@@ -13,5 +13,9 @@ redis>=5.2.1,<7.0
 # per-phase Timeout object, which matters when one research request fans out to
 # several 10-20MB filing downloads that must not share one flat deadline.
 httpx>=0.28.1,<0.29
+# Imported directly by services/plaid_client to give the Plaid SDK an explicit
+# CA bundle. It arrives transitively via httpx either way, but a module that
+# imports it needs it declared rather than inherited.
+certifi>=2024.7.4
 cryptography>=44.0.0
 python-dotenv>=1.0.1
