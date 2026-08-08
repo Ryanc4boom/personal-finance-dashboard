@@ -6,11 +6,20 @@ sources are tried in descending order of trustworthiness:
 1. **An explicit override** on the request. Lets the user ask "what would the
    P/E be at $150" without touching config, and makes the valuation stage
    testable without a network call.
-2. **The `security` table.** Phase 4 already stores a close price and its date
-   for every instrument in the user's portfolio. If they hold the ticker, the
-   price is already here, it came from their own custodian, and fetching it
-   again from a third party would be strictly worse.
-3. **Finnhub**, if a key is configured.
+2. **Finnhub**, if a key is configured. A ratio is only as current as its
+   numerator, so a live quote outranks any stored one.
+3. **The `security` table.** Phase 4 stores a close price and its date for
+   every instrument in the user's portfolio — but only as of the last sync,
+   which is a custodian-driven schedule measured in days.
+
+Recency beats provenance here, which is worth stating because the instinct
+runs the other way. The portfolio close came from the user's own custodian and
+is the better *number*; it is simply the wrong *date*. NVDA closed at $175.69
+on the last sync against $223.96 live, a 27% gap that lands entirely in the
+P/E. Ranking the custodian first would answer a valuation question with a price
+from last week and label it with today's date. The stored close stays as the
+fallback for when no key is set or the provider is down, where the choice is
+between a slightly old price and no valuation stage at all.
 
 If all three miss, the result is `None` and the valuation checks report
 `UNKNOWN`. That is the entire point of this module's design: a research tool
@@ -125,4 +134,4 @@ def resolve_price(
     if override_cents is not None and override_cents > 0:
         return PriceQuote(override_cents, SOURCE_OVERRIDE, date.today(), False)
 
-    return _from_portfolio(db, ticker) or _from_finnhub(ticker)
+    return _from_finnhub(ticker) or _from_portfolio(db, ticker)

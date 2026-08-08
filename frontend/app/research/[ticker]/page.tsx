@@ -34,7 +34,7 @@ const SUMMARY_ORDER: CheckStatus[] = ["PASS", "WARN", "FAIL", "UNKNOWN"];
 const PRICE_SOURCE_LABELS: Record<string, string> = {
   OVERRIDE: "your entered price",
   PORTFOLIO: "your portfolio's stored close",
-  FINNHUB: "Finnhub",
+  FINNHUB: "a live Finnhub quote",
 };
 
 export default function TickerResearchPage() {
