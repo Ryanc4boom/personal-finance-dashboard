@@ -25,6 +25,17 @@ import {
   type Transaction,
 } from "@/lib/types";
 
+/**
+ * The independent things on this page that can fail. Each owns its own slot, so
+ * one recovering never silently clears another's still-valid message.
+ * "action" covers user-initiated writes — recategorizing, re-running the
+ * pipeline, linking an account — which are mutually exclusive in practice.
+ */
+type ErrorSource = "summary" | "transactions" | "action";
+
+// Fixed display order so a message cannot jump position as others come and go.
+const ERROR_SOURCES: ErrorSource[] = ["summary", "transactions", "action"];
+
 export default function LedgerPage() {
   return (
     <Suspense fallback={null}>
@@ -43,7 +54,11 @@ function Ledger() {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  // Keyed by source rather than a single string. The panes load independently,
+  // so a failed account-summary request and a successful transaction fetch race
+  // on mount — sharing one slot let whichever resolved last erase the other's
+  // message, usually within a few hundred milliseconds of it appearing.
+  const [errors, setErrors] = useState<Partial<Record<ErrorSource, string>>>({});
   const [notice, setNotice] = useState<string | null>(null);
   const [saving, setSaving] = useState<Set<string>>(new Set());
   const [ruleTarget, setRuleTarget] = useState<Transaction | null>(null);
@@ -67,13 +82,26 @@ function Ledger() {
     return () => clearTimeout(timer);
   }, [searchInput]);
 
+  const reportError = useCallback((source: ErrorSource, message: string | null) => {
+    setErrors((prev) => {
+      if (message === null) {
+        if (prev[source] === undefined) return prev;
+        const next = { ...prev };
+        delete next[source];
+        return next;
+      }
+      return prev[source] === message ? prev : { ...prev, [source]: message };
+    });
+  }, []);
+
   const loadSummary = useCallback(async () => {
     try {
       setSummary(await getAccountSummary());
+      reportError("summary", null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not load accounts");
+      reportError("summary", err instanceof Error ? err.message : "Could not load accounts");
     }
-  }, []);
+  }, [reportError]);
 
   useEffect(() => {
     loadSummary();
@@ -91,11 +119,14 @@ function Ledger() {
         if (cancelled) return;
         setTransactions(page.items);
         setTotal(page.total);
-        setError(null);
+        reportError("transactions", null);
       })
       .catch((err: unknown) => {
         if (cancelled) return;
-        setError(err instanceof Error ? err.message : "Could not load transactions");
+        reportError(
+          "transactions",
+          err instanceof Error ? err.message : "Could not load transactions",
+        );
         setTransactions([]);
         setTotal(0);
       })
@@ -108,7 +139,7 @@ function Ledger() {
     return () => {
       cancelled = true;
     };
-  }, [filters]);
+  }, [filters, reportError]);
 
   function patchFilters(patch: Partial<LedgerFilters>) {
     setFilters((f) => ({ ...f, ...patch }));
@@ -151,9 +182,9 @@ function Ledger() {
     try {
       const updated = await updateTransaction(txn.id, { category_id: categoryId });
       setTransactions((rows) => rows.map((r) => (r.id === txn.id ? updated : r)));
-      setError(null);
+      reportError("action", null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not update the category");
+      reportError("action", err instanceof Error ? err.message : "Could not update the category");
     } finally {
       setSaving((s) => {
         const next = new Set(s);
@@ -166,6 +197,7 @@ function Ledger() {
   async function runMaintenance() {
     setBusy(true);
     setNotice(null);
+    reportError("action", null);
     try {
       const transfers = await detectTransfers();
       const recat = await recategorizeAll();
@@ -177,7 +209,7 @@ function Ledger() {
       );
       refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not re-run the pipeline");
+      reportError("action", err instanceof Error ? err.message : "Could not re-run the pipeline");
     } finally {
       setBusy(false);
     }
@@ -203,14 +235,24 @@ function Ledger() {
             <RefreshCw className={`h-4 w-4 ${busy ? "animate-spin" : ""}`} />
             Re-run rules
           </button>
-          <LinkAccountButton onLinked={refresh} onError={setError} />
+          <LinkAccountButton
+            onLinked={refresh}
+            onError={(message) => reportError("action", message)}
+          />
         </div>
       </header>
 
-      {error && (
-        <div className="flex items-start gap-2 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-          <span>{error}</span>
+      {ERROR_SOURCES.some((source) => errors[source]) && (
+        <div className="space-y-3">
+          {ERROR_SOURCES.filter((source) => errors[source]).map((source) => (
+            <div
+              key={source}
+              className="flex items-start gap-2 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700"
+            >
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>{errors[source]}</span>
+            </div>
+          ))}
         </div>
       )}
 
