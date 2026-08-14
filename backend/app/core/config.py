@@ -22,6 +22,18 @@ class Settings(BaseSettings):
     plaid_products: str = "transactions"
     plaid_country_codes: str = "US"
     plaid_webhook_url: str = ""
+    # Required to link OAuth institutions — which is most large US banks (Chase,
+    # Wells Fargo, Capital One, BofA). Those hand the user off to the bank's own
+    # site and need somewhere to send them back; without it Link fails on return
+    # while smaller password-based institutions keep working, so the breakage
+    # looks bank-specific rather than like a missing setting.
+    #
+    # Must be https in Production and registered under Developers -> API ->
+    # Allowed Redirect URIs in the Plaid dashboard, so a bare
+    # http://localhost:3000 will be rejected — use a tunnel (ngrok) for local
+    # OAuth testing. Left blank the parameter is omitted entirely, which keeps
+    # non-OAuth linking working exactly as before.
+    plaid_redirect_uri: str = ""
 
     dev_user_email: str = "me@example.com"
     cors_origins: str = "http://localhost:3000"

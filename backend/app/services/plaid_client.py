@@ -85,6 +85,10 @@ def create_link_token(user_id: str) -> dict:
         country_codes=[CountryCode(c) for c in settings.plaid_country_code_list],
         language="en",
         **({"webhook": settings.plaid_webhook_url} if settings.plaid_webhook_url else {}),
+        # Omitted rather than sent empty: Plaid rejects a blank redirect_uri, and
+        # sending one that is not registered in the dashboard fails the whole
+        # link_token_create call rather than just the OAuth banks.
+        **({"redirect_uri": settings.plaid_redirect_uri} if settings.plaid_redirect_uri else {}),
     )
     return jsonable(get_client().link_token_create(request).to_dict())
 
