@@ -17,5 +17,8 @@ httpx>=0.28.1,<0.29
 # CA bundle. It arrives transitively via httpx either way, but a module that
 # imports it needs it declared rather than inherited.
 certifi>=2024.7.4
+# ES256 verification of the JWT Plaid signs its webhooks with. Needs the
+# `crypto` extra's ECDSA support, which cryptography (already required) provides.
+PyJWT>=2.10.0
 cryptography>=44.0.0
 python-dotenv>=1.0.1

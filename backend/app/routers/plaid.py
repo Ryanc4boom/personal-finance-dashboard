@@ -18,7 +18,7 @@ from app.schemas.plaid import (
     SyncRequest,
     SyncResponse,
 )
-from app.services import ingestion, plaid_client
+from app.services import ingestion, plaid_client, plaid_webhook
 from app.services.users import get_current_user
 
 logger = logging.getLogger(__name__)
@@ -97,11 +97,30 @@ def sync(payload: SyncRequest | None = None, db: Session = Depends(get_db)):
 async def webhook(request: Request, db: Session = Depends(get_db)):
     """Plaid webhook receiver.
 
-    Returns 2xx unconditionally: Plaid retries on non-2xx, and a retry storm over
-    an unrecognised webhook type is worse than dropping it. Real failures are
-    surfaced through item.status/error_code instead.
+    Returns 2xx for anything that is genuinely from Plaid: Plaid retries on
+    non-2xx, and a retry storm over an unrecognised webhook type is worse than
+    dropping it. Real failures are surfaced through item.status/error_code
+    instead.
+
+    A failed signature check is the one exception and answers 401. Retries do
+    not matter there — a forged request has no one to retry it, and a genuine
+    webhook that fails verification (a clock far enough out of sync to blow the
+    freshness window) *should* be retried once the cause is fixed.
     """
-    body = await request.json()
+    # Raw bytes, before any parsing: the signature covers the exact payload
+    # Plaid transmitted, and `await request.json()` would discard it.
+    raw_body = await request.body()
+    try:
+        plaid_webhook.verify(request.headers.get(plaid_webhook.VERIFICATION_HEADER), raw_body)
+    except plaid_webhook.WebhookVerificationError as exc:
+        logger.warning("Rejected unverified Plaid webhook: %s", exc)
+        raise HTTPException(status_code=401, detail="Webhook verification failed") from exc
+
+    try:
+        body = json.loads(raw_body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Body is not valid JSON") from exc
+
     webhook_type = body.get("webhook_type")
     webhook_code = body.get("webhook_code")
     provider_item_id = body.get("item_id")

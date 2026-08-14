@@ -1,0 +1,9 @@
+# Test-only dependencies. Kept out of requirements.txt so the runtime image
+# does not ship a test runner.
+#
+#   pip install -r requirements.txt -r requirements-dev.txt
+#   pytest
+
+-r requirements.txt
+
+pytest>=8.3.0
