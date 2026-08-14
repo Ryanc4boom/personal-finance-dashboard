@@ -89,6 +89,11 @@ def create_link_token(user_id: str) -> dict:
         # sending one that is not registered in the dashboard fails the whole
         # link_token_create call rather than just the OAuth banks.
         **({"redirect_uri": settings.plaid_redirect_uri} if settings.plaid_redirect_uri else {}),
+        **(
+            {"optional_products": [Products(p) for p in settings.plaid_optional_product_list]}
+            if settings.plaid_optional_product_list
+            else {}
+        ),
     )
     return jsonable(get_client().link_token_create(request).to_dict())
 

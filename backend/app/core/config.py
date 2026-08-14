@@ -20,6 +20,15 @@ class Settings(BaseSettings):
     plaid_secret: str = ""
     plaid_env: str = "sandbox"
     plaid_products: str = "transactions"
+    # Requested only where the institution supports them. `investments` belongs
+    # here rather than in plaid_products because the two are enforced very
+    # differently, and not at link_token_create — that call is accepted either
+    # way. Products in `products` are treated as required, so Link hides every
+    # institution that lacks them; requiring investments would quietly drop
+    # Chase and Capital One from the bank picker. Leaving investments out
+    # altogether has the opposite failure: a brokerage links fine but grants no
+    # holdings, and the Phase 4 investment sync has nothing to read.
+    plaid_optional_products: str = ""
     plaid_country_codes: str = "US"
     plaid_webhook_url: str = ""
     # Required to link OAuth institutions — which is most large US banks (Chase,
@@ -73,6 +82,10 @@ class Settings(BaseSettings):
     @property
     def plaid_product_list(self) -> list[str]:
         return [p.strip() for p in self.plaid_products.split(",") if p.strip()]
+
+    @property
+    def plaid_optional_product_list(self) -> list[str]:
+        return [p.strip() for p in self.plaid_optional_products.split(",") if p.strip()]
 
     @property
     def plaid_country_code_list(self) -> list[str]:
