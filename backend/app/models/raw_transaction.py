@@ -27,7 +27,9 @@ class RawTransaction(Base):
     )
     provider: Mapped[str] = mapped_column(String(32), nullable=False, server_default="plaid")
     provider_txn_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
-    # added | modified | removed
+    # added | modified | removed | holdings
+    # Keep new values inside 16 chars or widen the column with a migration — an
+    # overflow here surfaces as an opaque 500 mid-sync, not a validation error.
     event_type: Mapped[str] = mapped_column(String(16), nullable=False)
     raw_payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
     received_at: Mapped[datetime] = mapped_column(

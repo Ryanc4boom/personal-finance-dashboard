@@ -79,6 +79,10 @@ class SyncResult:
     skipped: bool = False
     error: str | None = None
     warnings: list[str] = field(default_factory=list)
+    # Nested rather than flattened into the counters above: a holdings snapshot
+    # is not "added rows", and merging the two would leave `added` ambiguous
+    # about which product it counted.
+    investments: dict | None = None
 
     def as_dict(self) -> dict:
         return self.__dict__.copy()
@@ -316,6 +320,15 @@ def sync_item(db: Session, item: Item) -> SyncResult:
                 db.refresh(item)
                 cursor = item.cursor
                 continue
+            if code == "PRODUCTS_NOT_SUPPORTED":
+                # An investment-only institution (Fidelity, Vanguard, Schwab...)
+                # has no transactions product at all. That is a fact about the
+                # institution, not a fault in this item, so it must not mark the
+                # item errored and must not abort the run — the holdings pull at
+                # the end of this function is the entire reason it was linked.
+                logger.info("item %s does not support transactions; investments only", item.id)
+                result.warnings.append("institution does not support transactions")
+                break
             item.status = "error"
             item.error_code = code
             db.commit()
@@ -363,6 +376,24 @@ def sync_item(db: Session, item: Item) -> SyncResult:
             break
     else:
         result.warnings.append(f"stopped after {MAX_PAGES} pages; run sync again to continue")
+
+    # Composed at the tail, not interleaved above. `sync_investments` stays its
+    # own driver for the reasons set out in the Phase 4 section — a cursor loop,
+    # a stateless snapshot and an offset-paginated window do not share a shape —
+    # but every route that brings an item up to date funnels through sync_item,
+    # so this is the one place that makes an investment-only item work at all.
+    # Cash-only banks cost one extra Plaid call that returns PRODUCTS_NOT_SUPPORTED
+    # and is reported as `skipped`, which is cheaper than asking every caller to
+    # know which of its items hold securities.
+    investments = sync_investments(db, item)
+    result.investments = investments.as_dict()
+    if investments.error:
+        # Surfaced as a warning rather than promoted to result.error: the
+        # transaction sync above may well have succeeded, and reporting the whole
+        # run as failed would hide rows that are already committed.
+        result.warnings.append(f"investments: {investments.error}")
+    elif not investments.skipped:
+        result.accounts_upserted += investments.accounts_upserted
 
     return result
 
@@ -641,10 +672,22 @@ def sync_investments(
         holdings_response = plaid_client.investments_holdings_get(access_token)
     except plaid.ApiException as exc:
         code = plaid_error_code(exc)
-        if code in {"PRODUCTS_NOT_SUPPORTED", "NO_INVESTMENT_ACCOUNTS"}:
+        if code in {
+            "PRODUCTS_NOT_SUPPORTED",
+            "NO_INVESTMENT_ACCOUNTS",
+            # The access token carries no investments consent — either the user
+            # did not grant it at Link time or the institution never offered it.
+            # That is a fact about the token's scope, not a fault in the item,
+            # and it matters now that every sync calls through here: treating it
+            # as an error marks perfectly healthy cash items `status=error` and
+            # makes the UI claim the connection is broken when it is not.
+            # Re-consent requires a fresh Link session, not a retry.
+            "ADDITIONAL_CONSENT_REQUIRED",
+        }:
             # A cash-only institution is not an error; it simply has nothing to
             # contribute here.
             result.skipped = True
+            result.warnings.append(f"investments unavailable: {code}")
             return result
         item.status = "error"
         item.error_code = code
@@ -652,7 +695,12 @@ def sync_investments(
         result.error = code
         return result
 
-    _record_raw(db, item, "investments_holdings", {"summary": "holdings snapshot"})
+    # "holdings", not "investments_holdings": event_type is String(16) and the
+    # longer label overflowed it, throwing a DataError mid-sync. The real payload
+    # is stored rather than a stub summary — this table is the system of record
+    # for re-processing, and a row that records only that a snapshot happened
+    # cannot be replayed, which is the one thing it exists for.
+    _record_raw(db, item, "holdings", holdings_response)
 
     for account_payload in holdings_response.get("accounts") or []:
         upsert_account(db, item, account_payload)
