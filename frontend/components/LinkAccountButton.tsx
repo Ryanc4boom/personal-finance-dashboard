@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Plus, RefreshCw } from "lucide-react";
 import { usePlaidLink } from "react-plaid-link";
+import type { PlaidLinkOnExit, PlaidLinkOnEvent } from "react-plaid-link";
 import { createLinkToken, setAccessToken, syncTransactions } from "@/lib/api";
 
 interface Props {
@@ -31,11 +32,23 @@ export default function LinkAccountButton({ onLinked, onError }: Props) {
   const onErrorRef = useRef(onError);
   onErrorRef.current = onError;
 
-  // Kept local instead of raised through onError. This is the one failure that
-  // happens during mount, and the page clears its shared error banner when the
+  // Kept local instead of raised through onError. Failures here can happen
+  // during mount, and the page clears its shared error banner when the
   // transaction list finishes loading — so a message reported that early is
   // wiped a few hundred milliseconds later, exactly when the user is reading it.
-  const [resumeError, setResumeError] = useState<string | null>(null);
+  const [linkError, setLinkError] = useState<string | null>(null);
+
+  // Clears the OAuth breadcrumbs. Both the stored token and the oauth_state_id
+  // are single-use, so anything that ends a Link session has to drop them or a
+  // refresh replays a handoff that Plaid has already spent.
+  const clearOAuthState = useCallback(() => {
+    window.sessionStorage.removeItem(OAUTH_TOKEN_KEY);
+    if (new URLSearchParams(window.location.search).has("oauth_state_id")) {
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+    setReceivedRedirectUri(undefined);
+    setLinkToken(null);
+  }, []);
 
   const onSuccess = useCallback(
     async (publicToken: string) => {
@@ -46,21 +59,55 @@ export default function LinkAccountButton({ onLinked, onError }: Props) {
       } catch (err) {
         onError(err instanceof Error ? err.message : "Failed to link account");
       } finally {
-        window.sessionStorage.removeItem(OAUTH_TOKEN_KEY);
-        // Strip Plaid's oauth_state_id so a refresh does not try to resume a
-        // handoff that has already been exchanged.
-        if (new URLSearchParams(window.location.search).has("oauth_state_id")) {
-          window.history.replaceState({}, "", window.location.pathname);
-        }
-        setReceivedRedirectUri(undefined);
-        setLinkToken(null);
+        clearOAuthState();
         setBusy(false);
       }
     },
-    [onLinked, onError],
+    [onLinked, onError, clearOAuthState],
   );
 
-  const { open, ready } = usePlaidLink({ token: linkToken, onSuccess, receivedRedirectUri });
+  // Plaid reports OAuth failures, bank-side outages and plain user cancellation
+  // through onExit, never onSuccess. Without this handler every one of those is
+  // silent: Link closes, no item is created, and the UI just keeps showing zero
+  // accounts with nothing to explain it. An exit is also the end of the session,
+  // so the single-use OAuth breadcrumbs have to be dropped here too.
+  const onExit = useCallback<PlaidLinkOnExit>(
+    (err, metadata) => {
+      if (err) {
+        // display_message is Plaid's user-facing wording and is often null for
+        // institution errors; error_code is always present and is the string
+        // worth quoting when digging through Plaid's docs or dashboard logs.
+        const detail = err.display_message || err.error_message || "";
+        setLinkError(
+          `Bank connection failed${detail ? `: ${detail}` : "."} (${err.error_code})` +
+            (metadata?.institution?.name ? ` — ${metadata.institution.name}` : ""),
+        );
+        console.error("[plaid] exit with error", { err, metadata });
+      } else {
+        // No error means the user closed Link deliberately. Not worth an alarming
+        // banner, but it still ends the session and still needs the cleanup.
+        console.debug("[plaid] exit without error", metadata);
+      }
+      clearOAuthState();
+      setBusy(false);
+    },
+    [clearOAuthState],
+  );
+
+  // Diagnostics only. The OAuth round trip leaves no server-side trace when it
+  // fails part-way — the browser goes to the bank and simply never comes back —
+  // so these breadcrumbs are the only record of how far the handoff got.
+  const onEvent = useCallback<PlaidLinkOnEvent>((eventName, metadata) => {
+    console.debug(`[plaid] ${eventName}`, metadata);
+  }, []);
+
+  const { open, ready } = usePlaidLink({
+    token: linkToken,
+    onSuccess,
+    onExit,
+    onEvent,
+    receivedRedirectUri,
+  });
 
   // Resume an OAuth handoff. The bank returns the browser here with an
   // oauth_state_id, and Link only picks the flow back up if it is handed both
@@ -69,7 +116,7 @@ export default function LinkAccountButton({ onLinked, onError }: Props) {
     if (!new URLSearchParams(window.location.search).has("oauth_state_id")) return;
     const stored = window.sessionStorage.getItem(OAUTH_TOKEN_KEY);
     if (!stored) {
-      setResumeError(
+      setLinkError(
         "Could not finish connecting your bank — this browser has no record of the request. Please click Link account and try again.",
       );
       window.history.replaceState({}, "", window.location.pathname);
@@ -87,7 +134,7 @@ export default function LinkAccountButton({ onLinked, onError }: Props) {
 
   async function handleLink() {
     setBusy(true);
-    setResumeError(null);
+    setLinkError(null);
     try {
       const { link_token } = await createLinkToken();
       // Stored before opening: if the user picks an OAuth bank, the redirect
@@ -138,12 +185,12 @@ export default function LinkAccountButton({ onLinked, onError }: Props) {
           Link account
         </button>
       </div>
-      {resumeError && (
+      {linkError && (
         <p
           role="alert"
           className="max-w-xs rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-right text-sm text-amber-900"
         >
-          {resumeError}
+          {linkError}
         </p>
       )}
     </div>
