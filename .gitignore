@@ -32,12 +32,35 @@ coverage/
 # ---- Local data ----
 # Postgres runs in docker, but stray dumps and any sqlite scratch DB are
 # real account data, not code.
+#
+# A pg_dump of this database contains live Plaid access tokens in item.access_token
+# plus every real transaction, so a stray dump is a worse leak than .env itself.
+# `*.dump` and `*.sql.gz` alone missed the obvious case: pg_dump's default output
+# is plain `.sql`.
 *.db
 *.sqlite
 *.sqlite3
 *.dump
+*.sql
 *.sql.gz
 pgdata/
+
+# Backups of config. The established convention is `env-<timestamp>.bak`, which
+# holds PLAID_SECRET and ENCRYPTION_KEY in the clear. These live in
+# ~/Budgeting-backups today, outside the repo — this rule is here so that a
+# backup taken from inside the working tree cannot be committed by accident.
+*.bak
+*.backup
+
+# ---- Key material ----
+# Nothing here is used today. Listed pre-emptively: an accidental key commit is
+# unrecoverable once public, and the cost of the rule is nil.
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+*.keystore
 
 # ---- Editor / OS / tooling ----
 .DS_Store
@@ -45,3 +68,7 @@ pgdata/
 .idea/
 .vscode/
 .claude/settings.local.json
+# Agent worktrees are full checkouts (~486M with node_modules) that sit inside
+# the repo. Untracked but unignored, they were one `git add -A` away from being
+# committed wholesale.
+.claude/worktrees/
