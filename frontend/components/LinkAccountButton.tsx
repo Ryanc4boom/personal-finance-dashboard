@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Plus, RefreshCw } from "lucide-react";
 import { usePlaidLink } from "react-plaid-link";
 import type { PlaidLinkOnExit, PlaidLinkOnEvent } from "react-plaid-link";
@@ -25,12 +25,6 @@ export default function LinkAccountButton({ onLinked, onError }: Props) {
   // makes Plaid try to resume a flow that never started, so it stays undefined
   // in the normal path.
   const [receivedRedirectUri, setReceivedRedirectUri] = useState<string | undefined>(undefined);
-
-  // Held in a ref so the resume effect below runs exactly once on mount. As a
-  // plain dependency, a parent re-render that reallocates onError would re-fire
-  // the effect and reopen Link on top of itself.
-  const onErrorRef = useRef(onError);
-  onErrorRef.current = onError;
 
   // Kept local instead of raised through onError. Failures here can happen
   // during mount, and the page clears its shared error banner when the
