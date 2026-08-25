@@ -1,154 +1,281 @@
-# Budgeting Platform — Phase 1
+# Personal Finance & Investment Platform
 
-System foundation, database schema, Plaid ingestion engine, and transaction ledger UI.
+A full-stack budgeting and investing platform I built for my own money — real
+bank/brokerage aggregation via Plaid, a four-layer transaction categorization
+engine, cash-flow forecasting, portfolio and net-worth tracking, and a
+from-scratch equity research tool that scores public companies straight from
+their SEC filings.
+
+It's built in five numbered phases, each with its own migration, service
+layer, and UI. Screenshots below are from the app running against a
+deterministic synthetic dataset (`app.seeds.demo` / `app.seeds.investments`) —
+no real account data ever leaves my machine, and the repo ships everything
+needed to generate the same fixtures yourself.
+
+![Product tour](docs/screenshots/demo.gif)
+
+---
+
+## Why this exists
+
+It's a real system I use to manage real money, so **correctness beat speed
+everywhere it mattered**: integer-cents storage (never a float touches a
+dollar amount), idempotent Plaid ingestion, raw-payload preservation for
+replay, and a database `CHECK` constraint that ties transaction direction to
+the sign of the amount so a bad write fails loudly instead of quietly
+corrupting a balance.
+
+Auth is deliberately out of scope — it's a single-user system seeded from
+`DEV_USER_EMAIL` — but the `user → item → account → transaction` ownership
+chain is enforced in every query from day one, so bolting on real auth later
+is a swap of one function, not a schema rework.
+
+---
+
+## Feature tour
+
+### Transaction ledger & Plaid ingestion (Phase 1)
+
+Cursor-based delta sync against Plaid's `transactions_sync`, with pending →
+posted collapsing (a bank issues a pending auth, then a *separate* posted
+transaction later — naive ingestion double-counts it), Fernet-encrypted access
+tokens, and a Redis lock per item so a webhook and a manual sync can never
+race the same cursor. Every balance on screen is clickable and drills into
+its own filtered transaction list.
+
+![Ledger](docs/screenshots/ledger.png)
+
+### Categorization, transfers & budgets (Phase 2)
+
+A four-layer categorization engine (user rules → merchant defaults → Plaid's
+category → uncategorized, first match wins, and a human's choice can never be
+silently overwritten) feeds a pacing-aware budget view. Internal transfers and
+credit-card payments are detected and excluded from spend — otherwise paying
+your own card is double-counted as the largest "expense" of the month.
+
+![Budgets](docs/screenshots/budgets.png)
+
+### Recurring detection, subscriptions & forecasting (Phase 3)
+
+Recurring streams are promoted only when **both** a cadence test and an
+amount test agree — cadence alone would flag a daily coffee habit as a
+subscription, amount alone would flag every stable-priced purchase as
+recurring. The subscriptions view surfaces price hikes, cancelled plans, and
+"expected but never charged" gaps; the forecast projects daily cash balance
+forward and flags the date it's expected to dip below a safe floor.
+
+![Subscriptions](docs/screenshots/subscriptions.png)
+![Cash flow forecast](docs/screenshots/forecast.png)
+
+### Investments, net worth & goals (Phase 4)
+
+Portfolio value is resolved per account from each account's *newest* snapshot
+independently (a global `MAX(as_of_date)` would silently drop an account that
+synced on a different day and under-report the portfolio with no error). Cost
+basis is nullable and excluded from gain calculations when unknown, rather
+than defaulting to zero and reporting an ACATS-transferred position as 100%
+profit. Net worth is reconstructed backwards through the ledger for days with
+no stored snapshot, and every balance's sign is derived from account type
+rather than trusted, since Plaid and the demo fixtures disagree on sign
+convention for the same account type.
+
+![Investments](docs/screenshots/investments.png)
+![Net worth](docs/screenshots/net-worth.png)
+![Goals](docs/screenshots/goals.png)
+
+### Equity research: a four-stage SEC-sourced scorecard (Phase 5)
+
+Look up any SEC-registered ticker and get a **four-stage fundamental
+scorecard** built entirely from that company's own filings — no vendor
+fundamentals API, because the whole point is that every number is auditable
+back to a specific accession number on EDGAR:
+
+1. **Qualitative & Moat** — revenue durability (recurring vs. transactional,
+   classified from 10-K Item 1/1A language), customer concentration (>10% of
+   revenue from one customer), insider & executive ownership from the DEF 14A
+   proxy.
+2. **Income Statement & Growth** — 5-year revenue CAGR against a 10% bar,
+   gross/operating margin direction, and whether the diluted share count is
+   shrinking (buybacks) or growing (dilution).
+3. **Balance Sheet Health** — cash & short-term investments vs. long-term
+   debt, debt-to-equity below 1.5x, operating income covering interest
+   expense at least 5x (skipped for banks, where interest is the cost of
+   funds, not debt service).
+4. **Cash Flow & Valuation** — free cash flow vs. net income (earnings
+   quality), return on equity above 15%, and the P/E and PEG the market is
+   charging for that growth.
+
+Every check ships PASS/WARN/FAIL/**UNKNOWN** — a missing input is never
+silently treated as a pass, and a negative-equity or zero-base input returns
+"not meaningful" rather than a technically-valid, financially-nonsense ratio.
+The XBRL parser also detects and restates stock splits across the taxonomy
+change that would otherwise show NVIDIA's 10-for-1 as 880% dilution.
+
+![Stock research search](docs/screenshots/research-search.png)
+![Apple scorecard](docs/screenshots/research-aapl-top.png)
+
+*(Full scorecard: [`docs/screenshots/research-aapl.png`](docs/screenshots/research-aapl.png))*
+
+---
+
+## Architecture
 
 ```
 .
-├── docker-compose.yml        # PostgreSQL (TimescaleDB) + Redis + optional API container
+├── docker-compose.yml        # TimescaleDB + Redis (+ optional dockerized API)
 ├── backend/                  # FastAPI + SQLAlchemy + Alembic
-│   ├── alembic/versions/     # 0001_initial_schema.py
+│   ├── alembic/versions/     # 0001 schema · 0002 categorization/budgets ·
+│   │                         # 0003 recurring/forecast · 0004 investments/goals
 │   └── app/
 │       ├── core/             # config, db session, redis, encryption
-│       ├── models/           # user, institution, item, account, transaction, …
+│       ├── models/           # account, transaction, budget, recurring_stream,
+│       │                     # holding, investment_transaction, financial_goal, …
 │       ├── schemas/          # pydantic request/response models
-│       ├── routers/          # plaid, accounts, transactions
-│       └── services/         # ingestion, matching, normalize, plaid_client
-└── frontend/                 # Next.js App Router + Tailwind + lucide-react
+│       ├── routers/          # plaid, accounts, transactions, budgets, recurring,
+│       │                     # forecast, investments, net_worth, goals, research
+│       ├── services/         # ingestion, matching, normalization, categorization,
+│       │                     # transfers, budgets, recurring, forecasting,
+│       │                     # investment, net_worth, goals, sec_client, xbrl,
+│       │                     # filings, market_data, research
+│       └── seeds/            # deterministic synthetic fixtures for every phase
+└── frontend/                 # Next.js App Router + Tailwind + hand-rolled SVG charts
+    └── app/
+        ├── budgets/ subscriptions/ forecast/ investments/
+        ├── net-worth/ goals/ research/[ticker]/
+        └── page.tsx           # ledger
 ```
 
+**Backend:** FastAPI (sync endpoints on the threadpool — the work is blocking
+Plaid/SEC HTTP calls and blocking Redis, so `async def` would only stall the
+event loop), SQLAlchemy 2.x + Alembic, PostgreSQL via TimescaleDB (hypertable
+for balance snapshots), Redis for per-item sync locks, Fernet for
+encryption-at-rest, `httpx` for SEC EDGAR with an explicit rate limiter.
+
+**Frontend:** Next.js App Router, Tailwind, hand-rolled SVG charts (no
+charting library) for the balance/net-worth/allocation/forecast views.
+
 ---
 
-## Prerequisites
+## Getting started locally
 
-| Tool | Version | Notes |
-| --- | --- | --- |
-| Docker Desktop | any recent | Verified on 29.6.2 / Compose v5.3.1. Alternatively, point `DATABASE_URL`/`REDIS_URL` at your own Postgres 14+/Redis |
-| Python | 3.11+ | 3.14 verified |
-| Node.js | 20+ | 24 verified |
+### Prerequisites
 
----
-
-## Step-by-step: running locally in Plaid Sandbox
+| Tool | Version |
+| --- | --- |
+| Docker Desktop | any recent (verified 29.6.2 / Compose v5.3.1) |
+| Python | 3.11+ (3.14 verified) |
+| Node.js | 20+ (24 verified) |
 
 ### 1. Configure environment
 
 ```bash
 cp .env.example .env
+python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"  # paste into ENCRYPTION_KEY
 ```
 
-Generate an encryption key (Plaid access tokens are encrypted at rest with it) and paste it into `.env` as `ENCRYPTION_KEY`:
-
-```bash
-python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-```
-
-Then add your sandbox credentials from the [Plaid dashboard](https://dashboard.plaid.com/developers/keys):
-
-```
-PLAID_CLIENT_ID=<your client id>
-PLAID_SECRET=<your *sandbox* secret>
-PLAID_ENV=sandbox
-```
-
-### 2. Start Postgres + Redis
+### 2. Start Postgres + Redis, run migrations
 
 ```bash
 docker compose up -d db redis
-```
-
-The `db` image is `timescale/timescaledb:latest-pg16`; the migration enables the `timescaledb` extension and turns `balance_snapshot` into a hypertable.
-
-### 3. Run migrations and start the API
-
-```bash
 cd backend
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/alembic upgrade head
-.venv/bin/uvicorn app.main:app --reload --port 8000
 ```
 
-API docs: <http://localhost:8000/docs> · Health: <http://localhost:8000/health>
-
-### 4. Start the frontend
+### 3. Load synthetic data — no Plaid account needed
 
 ```bash
-cd frontend
-npm install
-cp .env.local.example .env.local
-npm run dev
+.venv/bin/python -m app.seeds.categories      # taxonomy + Plaid category mapping
+.venv/bin/python -m app.seeds.demo            # 26 months of ledger: bills, subscriptions, noise
+.venv/bin/python -m app.seeds.investments     # brokerage/401k/IRA holdings, a mortgage, 5 goals
 ```
 
-Open <http://localhost:3000>.
+Every seed is idempotent and namespaced under `DEMO_*` provider ids, so
+`--clear` removes it without touching real Plaid-linked data.
 
-### 5. Link a sandbox bank
-
-1. Click **Link account**.
-2. Pick any institution (e.g. "First Platypus Bank").
-3. Sandbox credentials: username `user_good`, password `pass_good`. If prompted for MFA, use `1234`.
-4. On success the backend exchanges the token and immediately runs a full backfill. Balances and transactions appear straight away.
-5. **Sync** re-runs the cursor-based delta pull at any time.
-
-### Optional: run the API in Docker too
+### 4. Run the API and frontend
 
 ```bash
-docker compose --profile full up -d
+.venv/bin/uvicorn app.main:app --reload --port 8000       # from backend/
+cd ../frontend && npm install && cp .env.local.example .env.local && npm run dev
 ```
 
-This builds `backend/`, runs `alembic upgrade head`, and serves on port 8000 with hot reload.
+Open <http://localhost:3000>. API docs at <http://localhost:8000/docs>.
 
-### Optional: webhooks
+### Optional: link a real bank instead (Plaid Sandbox)
 
-Plaid can only reach a public URL. Expose the API (e.g. `ngrok http 8000`), then set in `.env`:
+Fill in `PLAID_CLIENT_ID` / `PLAID_SECRET` (sandbox) from the
+[Plaid dashboard](https://dashboard.plaid.com/developers/keys), click **Link
+account**, pick any institution, and use `user_good` / `pass_good` (MFA
+`1234`). The backend exchanges the token and runs a full backfill
+immediately; **Sync** re-runs the cursor-based delta pull any time.
 
-```
-PLAID_WEBHOOK_URL=https://<your-tunnel>/api/v1/plaid/webhook
-```
+### Optional: stock research needs no account linking at all
 
-Re-link the item so the webhook is registered. `SYNC_UPDATES_AVAILABLE` then triggers a sync automatically.
+`/research/<ticker>` works out of the box against live SEC EDGAR data — try
+`/research/AAPL`. Set `FINNHUB_API_KEY` for live P/E/PEG, or it falls back to
+the last synced price in your portfolio (or reports "unknown" rather than
+guessing).
 
 ---
 
-## API surface
+## API surface (selected)
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| POST | `/api/v1/plaid/link-token` | Create a Link token for the Plaid Link flow |
-| POST | `/api/v1/plaid/set-access-token` | Exchange `public_token`, persist the item, run initial backfill |
-| POST | `/api/v1/plaid/sync` | Cursor-based delta sync for one item or all items |
-| POST | `/api/v1/plaid/webhook` | Plaid webhook receiver |
-| GET | `/api/v1/accounts` | Balances split into cash vs. credit liabilities |
-| GET | `/api/v1/transactions` | Ledger with `search`, `account_id`, `account_type`, `start_date`, `end_date`, `is_pending`, `limit`, `offset` |
-| GET | `/api/v1/transactions/{id}` | Single transaction |
+| POST | `/api/v1/plaid/link-token` | Create a Link token |
+| POST | `/api/v1/plaid/set-access-token` | Exchange `public_token`, backfill |
+| POST | `/api/v1/plaid/sync` | Cursor-based delta sync |
+| GET | `/api/v1/accounts` | Balances, cash vs. credit liabilities |
+| GET | `/api/v1/transactions` | Ledger with search/date/account/category filters |
+| GET | `/api/v1/budgets` | Pacing report for a period |
+| POST | `/api/v1/budgets/suggestions/apply` | Trailing-median limit suggestions |
+| GET | `/api/v1/subscriptions` | Active/paused/cancelled recurring commitments |
+| GET | `/api/v1/forecast` | Rolling daily cash-balance projection |
+| GET | `/api/v1/investments` | Portfolio value, allocation, per-account drilldown |
+| GET | `/api/v1/net-worth/history` | Reconstructed daily net worth |
+| GET | `/api/v1/goals` | Progress, required vs. observed monthly contribution |
+| GET | `/api/v1/research/{ticker}` | Four-stage SEC-sourced scorecard |
+
+Full interactive docs: `/docs` (FastAPI/OpenAPI).
 
 ---
 
-## Design decisions worth knowing
+## Engineering notes worth knowing
 
-**Integer cents everywhere.** Every currency column is `BIGINT` holding minor units. Conversion happens once, in `services/normalize.py`, via `Decimal(str(amount))` — building a `Decimal` from the float directly would inherit binary float error. No float ever touches a monetary value.
-
-**One sign convention, applied at the boundary.** Plaid reports a purchase as *positive* (money leaving) and a deposit as *negative*. That is flipped exactly once at ingestion so that internally `amount_cents > 0` always means money in and `< 0` money out. A database `CHECK` constraint enforces that `direction` and the sign never disagree, so a bad write fails loudly rather than silently corrupting totals.
-
-**Raw payloads are preserved.** Every provider payload lands in `raw_transaction` (append-only, JSONB) *before* normalisation. If a normalisation bug ships, it can be replayed from there — re-pulling from Plaid is not an option once the cursor has advanced.
-
-**Ingestion is idempotent.** All writes key on `provider_txn_id` (unique index). A duplicate webhook, a retried request, or a cursor rewind converges to the same rows instead of duplicating them.
-
-**The cursor is crash-safe.** `item.cursor` is committed in the *same* database transaction that applies that page's changes, so the cursor is never ahead of durable data. A crash mid-pagination resumes exactly where it left off.
-
-**Pending → posted collapsing.** Banks issue a pending authorisation and later a *separate* posted transaction with a new id; naive ingestion shows both and double-counts. `pending_transaction_id` from Plaid is used when present. Otherwise `services/matching.py` falls back to a heuristic requiring **all** of: same account, amount within ±1¢, date within 4 days, and one normalised description containing the other. Descriptions are stripped of processor noise and digit runs, since store/terminal numbers routinely differ between the two copies. It is deliberately conservative — a false match silently erases a real transaction, which is worse than showing a duplicate.
-
-On promotion the existing row is updated **in place** rather than replaced, so any notes, tags, or budget exclusions the user already applied to the pending row survive. The old id is kept in `pending_provider_txn_id` so a replayed delta cannot resurrect the ghost row.
-
-**Concurrent syncs are serialised.** Plaid's cursor model is not concurrency-safe — two workers reading the same cursor would both replay the same delta. A Redis lock per item prevents a webhook and a manual sync from racing.
-
-**Access tokens are encrypted at rest** with Fernet (`ENCRYPTION_KEY`), never logged in plaintext.
-
-**Traceability in the UI.** Every balance on screen is a button. Clicking *Depository Cash* or *Credit Card Liabilities* filters the table to that account class; clicking an individual account chip filters to that account. No number is shown that you cannot drill into.
+- **Integer cents, everywhere.** Every currency column is `BIGINT` minor
+  units; conversion from Plaid's float happens once, via `Decimal(str(x))`,
+  never `Decimal(x)` — building a `Decimal` straight from a float inherits
+  its binary rounding error.
+- **Idempotent by construction.** All writes key on `provider_txn_id`; a
+  duplicate webhook, a retried request, or a rewound cursor converges to the
+  same rows instead of duplicating them. The sync cursor commits in the same
+  transaction as the data it advanced past, so a crash mid-page resumes
+  exactly where it left off rather than skipping or replaying.
+- **Raw payloads are preserved** in an append-only `raw_transaction` table
+  before normalization — a normalization bug is replayable, since re-pulling
+  from Plaid after the cursor has advanced is not an option.
+- **A human's category choice is sacred.** Every automated categorization
+  path checks `category_source != 'USER'` before writing; the only way past
+  it is an explicit `force=True` from a caller that knows the user asked.
+- **Recurring detection needs two independent signals to agree** (cadence
+  *and* amount) before calling something a subscription — either alone
+  produces false positives in opposite directions.
+- **A missing filing value is `UNKNOWN`, never a guess.** The research
+  engine's central rule: dividing by an absent interest-expense figure and
+  calling it "infinite coverage" would award a green flag to a company with
+  $90bn of debt purely because a number wasn't tagged.
+- **Every number in the research report traces to a filing URL.** SEC EDGAR
+  is the primary source specifically because a vendor fundamentals API
+  can't be audited and an XBRL fact with an accession number can.
 
 ---
 
-## Phase 1 scope notes
+## Status
 
-- **Auth is not implemented.** The API operates as a single user seeded from `DEV_USER_EMAIL`. The ownership chain (`user → item → account → transaction`) is real and already enforced in every query, so adding real auth later means replacing `services/users.get_current_user` — not reworking the schema.
-- **`transaction.category_id`** holds Plaid's personal-finance-category slug. It is intentionally not a foreign key yet; a `category` entity was not in the Phase 1 spec.
-- **`is_recurring`** is present and user-editable but not yet populated by ingestion — that needs Plaid's `/transactions/recurring` endpoint.
+Five phases built and browser-verified end to end, including a production
+Plaid Link flow (OAuth institutions, webhook-driven sync). Auth is the one
+deliberately deferred piece — see "Why this exists" above for why that's a
+contained gap rather than a structural one. This repo is public and contains
+no real financial data, credentials, or account identifiers; the app itself
+has no auth layer, so if you run it, keep it on `localhost`.

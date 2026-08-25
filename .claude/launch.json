@@ -6,6 +6,12 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev", "--prefix", "frontend"],
       "port": 3000
+    },
+    {
+      "name": "frontend-demo",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": ["-c", "NEXT_PUBLIC_API_URL=http://localhost:8001 PORT=3001 npm run dev --prefix frontend"],
+      "port": 3001
     }
   ]
 }
