@@ -40,7 +40,10 @@ class RuleBase(BaseModel):
 
 
 class RuleCreate(RuleBase):
-    pass
+    # Set here rather than on RuleBase: RuleOut shares that base but is built
+    # from ORM attributes rather than parsed from a request body, so forbidding
+    # extras there would guard nothing.
+    model_config = ConfigDict(extra="forbid")
 
 
 class RuleOut(RuleBase):

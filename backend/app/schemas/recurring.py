@@ -5,6 +5,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.models.enums import RecurrenceFrequency, StreamStatus
 
+from app.schemas import StrictRequest
+
 
 class RecurringStreamOut(BaseModel):
     """One detected stream. Every money field is integer cents, always positive;
@@ -43,7 +45,7 @@ class RecurringStreamOut(BaseModel):
     days_until_next: int = 0
 
 
-class RecurringStreamUpdate(BaseModel):
+class RecurringStreamUpdate(StrictRequest):
     """User-owned fields. Setting `status` or `is_subscription` locks that field
     against the next detection pass."""
 

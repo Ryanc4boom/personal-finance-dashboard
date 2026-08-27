@@ -3,8 +3,10 @@ from datetime import date
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.schemas import StrictRequest
 
-class BudgetUpsert(BaseModel):
+
+class BudgetUpsert(StrictRequest):
     category_id: uuid.UUID
     limit_cents: int = Field(ge=0)
     period: str = "MONTHLY"

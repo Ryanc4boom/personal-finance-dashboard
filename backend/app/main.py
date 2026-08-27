@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.auth import ApiKeyMiddleware
 from app.core.config import settings
+from app.core.headers import SecurityHeadersMiddleware
 from app.core.rate_limit import RateLimitMiddleware
 from app.routers import (
     accounts,
@@ -63,6 +64,11 @@ app.add_middleware(
     # preflight that the auth gate depends on.
     allow_headers=["Content-Type", "X-API-Key"],
 )
+
+# Outermost, so the headers land on every response including the 401s, 429s and
+# 500s raised by the middleware below — which are exactly the responses most
+# likely to render an unexpected content type.
+app.add_middleware(SecurityHeadersMiddleware)
 
 app.include_router(plaid.router)
 app.include_router(accounts.router)

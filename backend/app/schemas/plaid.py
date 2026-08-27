@@ -1,12 +1,14 @@
 from pydantic import BaseModel, Field
 
+from app.schemas import StrictRequest
+
 
 class LinkTokenResponse(BaseModel):
     link_token: str
     expiration: str | None = None
 
 
-class SetAccessTokenRequest(BaseModel):
+class SetAccessTokenRequest(StrictRequest):
     public_token: str = Field(..., description="public_token returned by Plaid Link onSuccess")
 
 
@@ -17,7 +19,7 @@ class SetAccessTokenResponse(BaseModel):
     sync: dict
 
 
-class SyncRequest(BaseModel):
+class SyncRequest(StrictRequest):
     item_id: str | None = Field(
         None, description="Sync a single item. Omitted syncs every item for the user."
     )

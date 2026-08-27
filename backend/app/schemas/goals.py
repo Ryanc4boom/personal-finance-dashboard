@@ -5,6 +5,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.enums import GoalCategory
 
+from app.schemas import StrictRequest
+
 
 class GoalAccountRefOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -80,7 +82,7 @@ class GoalsReportOut(BaseModel):
     goals: list[GoalOut]
 
 
-class GoalCreate(BaseModel):
+class GoalCreate(StrictRequest):
     name: str = Field(min_length=1, max_length=255)
     category: GoalCategory = GoalCategory.CUSTOM
     target_amount_cents: int = Field(gt=0)
@@ -91,7 +93,7 @@ class GoalCreate(BaseModel):
     linked_account_ids: list[uuid.UUID] = []
 
 
-class GoalUpdate(BaseModel):
+class GoalUpdate(StrictRequest):
     """Every field optional — but `linked_account_ids` is a full replacement.
 
     Omitting it leaves the links alone; sending `[]` unlinks everything. There

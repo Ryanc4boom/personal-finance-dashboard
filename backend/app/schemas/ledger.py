@@ -3,6 +3,8 @@ from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict
 
+from app.schemas import StrictRequest
+
 
 class AccountOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -66,7 +68,7 @@ class TransactionOut(BaseModel):
     merchant_display_name: str | None = None
 
 
-class TransactionUpdate(BaseModel):
+class TransactionUpdate(StrictRequest):
     """Every field here is user-owned; ingestion never overwrites them."""
 
     category_id: uuid.UUID | None = None
