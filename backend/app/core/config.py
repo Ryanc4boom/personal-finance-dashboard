@@ -47,6 +47,27 @@ class Settings(BaseSettings):
     dev_user_email: str = "me@example.com"
     cors_origins: str = "http://localhost:3000"
 
+    # Shared secret every API call must present in `X-API-Key`. This is not user
+    # authentication — there is still exactly one user — it is a gate that stops
+    # anything other than this app's own frontend from reaching the API.
+    #
+    # Two distinct holes close with it, and the second is the one that matters:
+    #
+    #  1. The API binds to localhost but is otherwise wide open, so any process
+    #     on the machine can read every transaction.
+    #  2. More seriously, a *custom request header* is not a CORS "simple
+    #     request", so requiring one forces a preflight on every call. Without
+    #     that, a POST carrying `text/plain` or a form content-type skips
+    #     preflight entirely and reaches the handler — meaning any page the user
+    #     happened to be browsing could fire `/api/v1/plaid/sync` and burn real
+    #     Plaid quota. CORS only blocks *reading* the reply, never the side
+    #     effect. See tests/test_api_key.py.
+    #
+    # Deliberately has no default: an auth gate that ships with a fallback value
+    # is one someone forgets to override, and it fails open silently. Blank
+    # means every request is refused with a 503 that says how to fix it.
+    api_key: str = ""
+
     # ---- Phase 5: SEC EDGAR + market data ----
     # SEC rejects requests without a declaring User-Agent that carries a contact
     # address (403, not 429), so this is not optional decoration. Left blank it

@@ -39,10 +39,27 @@ import type {
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
+// Shared secret the backend requires on every call (see backend/app/core/auth.py).
+//
+// NEXT_PUBLIC_ is inlined into the client bundle at build time, so this value is
+// visible to anyone using the app. That is understood and acceptable: it is not
+// protecting the user from themselves, it is stopping *other* origins from
+// calling the API. They cannot read this bundle cross-origin, and without the
+// header their requests need a preflight that CORS refuses.
+//
+// It follows that this is not a substitute for real auth if the API is ever
+// exposed beyond localhost — at that point the key is only as private as the
+// least careful browser it has been loaded into.
+const API_KEY = process.env.NEXT_PUBLIC_API_KEY ?? "";
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_URL}${path}`, {
     ...init,
-    headers: { "Content-Type": "application/json", ...init?.headers },
+    headers: {
+      "Content-Type": "application/json",
+      ...(API_KEY ? { "X-API-Key": API_KEY } : {}),
+      ...init?.headers,
+    },
     cache: "no-store",
   });
 
@@ -53,6 +70,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       if (typeof body.detail === "string") detail = body.detail;
     } catch {
       // Non-JSON error body — fall back to the status text.
+    }
+    // 401/503 from the gate are configuration faults, not user errors, and the
+    // raw detail ("Missing or invalid X-API-Key") means nothing to someone
+    // looking at a dashboard. Say what to actually do about it.
+    if (response.status === 401) {
+      throw new Error(
+        "API rejected the request key. Set NEXT_PUBLIC_API_KEY in frontend/.env.local " +
+          "to match API_KEY in .env, then restart the frontend.",
+      );
     }
     throw new Error(detail || `Request failed (${response.status})`);
   }
