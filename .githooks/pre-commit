@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+#
+# Block secrets and account data from being committed.
+#
+# This repo is public, and a push is instantly world-readable — unpushing does
+# not unpublish. .gitignore is the primary defence; this hook is the backstop
+# for the case it does not cover: `git add -f`, a file in a path nobody thought
+# to ignore, or a secret pasted inline into source.
+#
+# Deliberately dependency-free. A hook that only runs once someone has installed
+# a tool is a hook that is not running, and the whole point is that it holds on
+# an ordinary afternoon when nobody is thinking about secrets. See
+# .pre-commit-config.yaml for a gitleaks-based scan with far broader rules,
+# for when the toolchain is available.
+#
+# Install:  git config core.hooksPath .githooks
+#
+# It scans staged *content*, not the working tree, so it sees exactly what the
+# commit would contain.
+
+set -uo pipefail
+
+RED=$'\033[0;31m'; YELLOW=$'\033[0;33m'; RESET=$'\033[0m'
+fail=0
+
+note() { printf '%s%s%s\n' "$RED" "$1" "$RESET" >&2; }
+warn() { printf '%s%s%s\n' "$YELLOW" "$1" "$RESET" >&2; }
+
+staged=$(git diff --cached --name-only --diff-filter=ACM)
+[ -z "$staged" ] && exit 0
+
+# --------------------------------------------------------------------------- #
+# 1. Files that must never be committed regardless of content
+# --------------------------------------------------------------------------- #
+# .sql is here because pg_dump's default output is plain .sql, and a dump of
+# this database carries live Plaid access tokens plus every real transaction —
+# a worse leak than .env itself.
+while IFS= read -r file; do
+    case "$file" in
+        *.example|*.example.*|.githooks/*) continue ;;
+    esac
+    case "$file" in
+        .env|.env.*|*/.env|*/.env.*|*.pem|*.key|*.p12|*.pfx|*.keystore|id_rsa*|*.sql|*.dump|*.bak|*.backup)
+            note "BLOCKED  $file"
+            note "         This file type must never be committed to a public repo."
+            fail=1
+            ;;
+    esac
+done <<< "$staged"
+
+# --------------------------------------------------------------------------- #
+# 2. Secret-shaped content in staged additions
+# --------------------------------------------------------------------------- #
+# Patterns are anchored to this project's real credential formats where possible.
+# A generic high-entropy rule produces enough false positives to get a hook
+# disabled, which is worse than a narrower rule that people leave enabled.
+#
+# `label|regex` — extended regex.
+patterns=(
+    'Plaid access token|access-(sandbox|development|production)-[0-9a-f-]{16,}'
+    'Plaid link token|link-(sandbox|development|production)-[0-9a-f-]{16,}'
+    'Plaid client_id or secret assignment|PLAID_(CLIENT_ID|SECRET)[[:space:]]*[:=][[:space:]]*["'"'"']?[A-Za-z0-9]{16,}'
+    'Fernet/encryption key assignment|ENCRYPTION_KEY[[:space:]]*[:=][[:space:]]*["'"'"']?[A-Za-z0-9_+/=-]{32,}'
+    'API key assignment|(API_KEY|NEXT_PUBLIC_API_KEY)[[:space:]]*[:=][[:space:]]*["'"'"']?[A-Za-z0-9_-]{16,}'
+    'Private key block|-----BEGIN[A-Z ]*PRIVATE KEY-----'
+    'AWS access key id|AKIA[0-9A-Z]{16}'
+    'Generic secret assignment|(SECRET|PASSWORD|PASSWD|TOKEN)[A-Z_]*[[:space:]]*[:=][[:space:]]*["'"'"']?[A-Za-z0-9_+/=-]{20,}'
+    'Postgres URL with inline password|postgres(ql)?(\+[a-z0-9]+)?://[^:@/[:space:]]+:[^@/[:space:]]+@'
+)
+
+for file in $staged; do
+    case "$file" in
+        *.example|*.example.*|.githooks/*|*.lock|package-lock.json) continue ;;
+    esac
+
+    # Added lines only. Context lines are already committed, and re-reporting
+    # them makes every later commit fail for something that is not new.
+    added=$(git diff --cached -U0 -- "$file" | grep '^+' | grep -v '^+++' || true)
+    [ -z "$added" ] && continue
+
+    for entry in "${patterns[@]}"; do
+        label="${entry%%|*}"
+        regex="${entry#*|}"
+        if hits=$(printf '%s\n' "$added" | grep -nEi "$regex" 2>/dev/null); then
+            note "BLOCKED  $file"
+            note "         Looks like: $label"
+            # Show the matched line with its secret elided — printing it here
+            # would just copy the secret into a terminal scrollback and CI log.
+            printf '%s\n' "$hits" | head -3 | while IFS= read -r line; do
+                printf '%s         %.60s…%s\n' "$YELLOW" "$line" "$RESET" >&2
+            done
+            fail=1
+        fi
+    done
+done
+
+# --------------------------------------------------------------------------- #
+# 3. Postgres dumps disguised by extension
+# --------------------------------------------------------------------------- #
+for file in $staged; do
+    case "$file" in *.example|.githooks/*) continue ;; esac
+    if git diff --cached -- "$file" | grep -qE '^\+(PGDMP|-- PostgreSQL database dump)'; then
+        note "BLOCKED  $file"
+        note "         Contains a PostgreSQL dump — these carry live access tokens."
+        fail=1
+    fi
+done
+
+if [ "$fail" -ne 0 ]; then
+    warn ""
+    warn "Commit refused. Nothing has been committed."
+    warn "If a value here is genuinely not a secret, adjust the rule in"
+    warn ".githooks/pre-commit rather than bypassing the hook — a bypass is a"
+    warn "habit, and this repo is public."
+    exit 1
+fi
+
+exit 0

@@ -1,0 +1,40 @@
+# Deeper scanning than .githooks/pre-commit, for when the toolchain is present.
+#
+# The two are deliberately not the same thing. .githooks/pre-commit is
+# dependency-free and always runs; this needs `pre-commit` and `gitleaks`
+# installed, and buys a far broader ruleset (hundreds of provider-specific
+# credential formats) plus full-history scanning.
+#
+# Setup:
+#     brew install pre-commit gitleaks
+#     pre-commit install
+#
+# Note that `pre-commit install` writes .git/hooks/pre-commit and therefore
+# takes precedence over core.hooksPath. If you use both, keep core.hooksPath
+# and add the native hook to this file instead of relying on both mechanisms —
+# two hook systems that each think they are in charge is how one of them ends
+# up silently not running.
+#
+# Scan the whole history at any time with:
+#     gitleaks detect --source . --redact
+
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      # Belt and braces with .gitignore: this one is keyed on content, so it
+      # catches a private key committed under a name nobody thought to ignore.
+      - id: detect-private-key
+      - id: check-added-large-files
+        # A pg_dump of this database is both large and catastrophic. The size
+        # rule will not catch a small one, but it catches the common case before
+        # the content rules have to.
+        args: ["--maxkb=2048"]
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-merge-conflict
