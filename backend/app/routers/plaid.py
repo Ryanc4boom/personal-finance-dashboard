@@ -54,7 +54,19 @@ def set_access_token(payload: SetAccessTokenRequest, db: Session = Depends(get_d
 
     # Re-linking an existing item must not create a duplicate: reuse the row and
     # refresh its token, keeping the cursor so we resume rather than re-backfill.
-    item = db.scalar(select(Item).where(Item.provider_item_id == provider_item_id))
+    #
+    # Scoped to the caller. Matching on provider_item_id alone would overwrite
+    # the access_token of a row belonging to someone else while leaving its
+    # user_id untouched — the token would be filed under an account that did not
+    # obtain it. Today there is one user so this cannot fire, but the fix is
+    # free now and this is exactly the query that silently becomes an
+    # authorization bug the moment a second user exists.
+    item = db.scalar(
+        select(Item).where(
+            Item.provider_item_id == provider_item_id,
+            Item.user_id == user.id,
+        )
+    )
     if item is None:
         item = Item(user_id=user.id, provider_item_id=provider_item_id)
         db.add(item)
