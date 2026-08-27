@@ -68,6 +68,27 @@ class Settings(BaseSettings):
     # means every request is refused with a 503 that says how to fix it.
     api_key: str = ""
 
+    # ---- Rate limiting (see core/rate_limit.py) ----
+    # Off only for tests that need to make many calls; never set this false in a
+    # running deployment.
+    rate_limit_enabled: bool = True
+    # Generous. This bucket exists to stop a runaway render loop in the frontend
+    # hammering the database, not to police a human clicking around.
+    rate_limit_default_per_minute: int = 120
+    # Deliberately small. Every request in this bucket costs a billed Plaid call
+    # against a real quota, and there is no legitimate reason for a single user
+    # to link or sync more than a handful of times a minute. A `useEffect` with a
+    # bad dependency array can otherwise issue thousands.
+    rate_limit_plaid_per_minute: int = 6
+    # SEC enforces its 10 req/s ceiling by *IP ban*, and one research request
+    # fans out into several filing downloads. Getting banned takes out the whole
+    # research engine, so this is throttled well below what the app could push.
+    rate_limit_research_per_minute: int = 20
+    # Plaid retries webhooks on non-2xx, so this has to leave room for a genuine
+    # retry storm while still capping a forged flood. Verification happens after
+    # the limiter, so unsigned junk is cheap to shed here.
+    rate_limit_webhook_per_minute: int = 60
+
     # ---- Phase 5: SEC EDGAR + market data ----
     # SEC rejects requests without a declaring User-Agent that carries a contact
     # address (403, not 429), so this is not optional decoration. Left blank it

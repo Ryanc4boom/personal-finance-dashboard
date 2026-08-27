@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.auth import ApiKeyMiddleware
 from app.core.config import settings
+from app.core.rate_limit import RateLimitMiddleware
 from app.routers import (
     accounts,
     budgets,
@@ -45,6 +46,12 @@ app = FastAPI(
 # frontend and the fault looks like a CORS or network problem rather than a
 # missing key. tests/test_api_key.py asserts the header is present on a 401.
 app.add_middleware(ApiKeyMiddleware)
+
+# Outside the auth gate, so a caller without a valid key is still throttled.
+# The other order would let anyone spend the server's time generating 401s
+# indefinitely, and would leave the Plaid webhook — which is exempt from the key
+# by necessity — with no ceiling at all.
+app.add_middleware(RateLimitMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
