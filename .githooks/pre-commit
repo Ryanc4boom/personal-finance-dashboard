@@ -81,14 +81,31 @@ for file in $staged; do
     for entry in "${patterns[@]}"; do
         label="${entry%%|*}"
         regex="${entry#*|}"
-        if hits=$(printf '%s\n' "$added" | grep -nEi "$regex" 2>/dev/null); then
+        # `-e` is not optional: the private-key pattern starts with a dash, and
+        # without it grep parses the pattern as a bundle of flags, exits 2, and
+        # the rule silently never runs. That is exactly how this hook shipped
+        # with its private-key rule dead — see the status check below.
+        hits=$(printf '%s\n' "$added" | grep -nEi -e "$regex")
+        status=$?
+
+        if [ "$status" -eq 0 ]; then
             note "BLOCKED  $file"
             note "         Looks like: $label"
-            # Show the matched line with its secret elided — printing it here
-            # would just copy the secret into a terminal scrollback and CI log.
+            # Line number and a short prefix only. Printing the match would
+            # copy the secret into terminal scrollback and any CI log, which is
+            # a second disclosure on top of the one being prevented.
             printf '%s\n' "$hits" | head -3 | while IFS= read -r line; do
-                printf '%s         %.60s…%s\n' "$YELLOW" "$line" "$RESET" >&2
+                printf '%s         %.24s… (rest withheld)%s\n' "$YELLOW" "$line" "$RESET" >&2
             done
+            fail=1
+        elif [ "$status" -gt 1 ]; then
+            # grep >1 means the rule failed to execute, not that it found
+            # nothing. Refusing the commit is the only safe reading: a scanner
+            # that silently does not scan is worse than no scanner, because it
+            # is trusted.
+            note "BLOCKED  $file"
+            note "         Rule '$label' could not run (grep exit $status)."
+            note "         Fix the rule in .githooks/pre-commit — do not assume this file is clean."
             fail=1
         fi
     done
