@@ -65,7 +65,19 @@ patterns=(
     'Private key block|-----BEGIN[A-Z ]*PRIVATE KEY-----'
     'AWS access key id|AKIA[0-9A-Z]{16}'
     'Generic secret assignment|(SECRET|PASSWORD|PASSWD|TOKEN)[A-Z_]*[[:space:]]*[:=][[:space:]]*["'"'"']?[A-Za-z0-9_+/=-]{20,}'
-    'Postgres URL with inline password|postgres(ql)?(\+[a-z0-9]+)?://[^:@/[:space:]]+:[^@/[:space:]]+@'
+    # `$` is excluded from the PASSWORD segment only, so a URL whose password is
+    # environment interpolation — postgresql://${PGUSER}:${PGPASSWORD}@host —
+    # does not fire. That is not a literal credential by construction, and
+    # docker-compose.yml is built entirely out of them. A real inline password
+    # still matches, because a password containing a literal `$` has to be
+    # percent-encoded to be a valid URL anyway.
+    #
+    # The user segment deliberately still allows `$`. Excluding it from both was
+    # the first attempt and it opened a hole: postgresql://${PGUSER}:hunter2@host
+    # stopped matching, hiding a real password behind an interpolated username.
+    # Narrowed rather than bypassed — a --no-verify is a habit, an exemption is
+    # a decision with a reason attached.
+    'Postgres URL with inline password|postgres(ql)?(\+[a-z0-9]+)?://[^:@/[:space:]]+:[^@/$[:space:]]+@'
 )
 
 for file in $staged; do
