@@ -45,6 +45,29 @@ coverage/
 *.sql.gz
 pgdata/
 
+# dbt models ARE .sql files, so the rule above silently swallows the entire
+# analytics project — `git add` reports nothing and the push contains an empty
+# directory. Re-admit only the two paths that hold hand-written SQL. Keep these
+# as narrow as possible: the `*.sql` rule above is load-bearing and a broad
+# negation would put pg_dump output back in play.
+!analytics/dbt/models/**/*.sql
+!analytics/dbt/macros/**/*.sql
+!analytics/dbt/tests/**/*.sql
+!analytics/ddl/*.sql
+
+# ---- dbt / Dagster build artefacts ----
+# Not just noise — these carry data out of the database and into files that a
+# `git add -A` would happily commit to a public repo:
+#   target/manifest.json     compiled SQL for every model
+#   target/catalog.json      row counts and per-column stats
+#   target/run_results.json  timings and failure rows
+#   logs/dbt.log             at debug level, query text with real merchant
+#                            names and amounts
+analytics/dbt/target/
+analytics/dbt/logs/
+analytics/dbt/dbt_packages/
+analytics/dagster_home/
+
 # Backups of config. The established convention is `env-<timestamp>.bak`, which
 # holds PLAID_SECRET and ENCRYPTION_KEY in the clear. These live in
 # ~/Budgeting-backups today, outside the repo — this rule is here so that a
