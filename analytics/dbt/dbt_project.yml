@@ -1,0 +1,65 @@
+name: budgeting_analytics
+version: "1.0.0"
+config-version: 2
+
+profile: budgeting
+
+model-paths: ["models"]
+macro-paths: ["macros"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+snapshot-paths: ["snapshots"]
+target-path: "target"
+clean-targets: ["target", "dbt_packages"]
+
+flags:
+  # dbt phones home by default. Same reasoning as the Sentry rules in
+  # CLAUDE.md: this project's premise is that nothing leaves the machine.
+  send_anonymous_usage_stats: false
+
+  # Fail rather than silently ignore a config block that no longer matches a
+  # real resource — a stale path here is how tests quietly stop running.
+  require_resource_names_without_spaces: true
+
+# Relation identifiers are quoted. This is dbt-postgres' default and it MUST
+# stay: `user` is a reserved word in PostgreSQL, so `select * from user` is a
+# syntax error and only the quoting saves source('budgeting','user').
+# Note dbt does NOT quote CTE names or hand-written SQL, so a bare `user` in a
+# macro or singular test still breaks — see macros/ and tests/ for the
+# `src_users`/`users` naming convention that avoids it.
+quoting:
+  database: true
+  schema: true
+  identifier: true
+
+models:
+  budgeting_analytics:
+    # Everything is a table, nothing is a view and nothing is incremental.
+    #
+    # Not incremental: `transaction` rows are HARD DELETED on a Plaid `removed`
+    # delta (services/ingestion.remove_transaction does db.delete). An
+    # incremental model would retain rows that no longer exist in the source
+    # and drift further from reality on every run. At ~10^3 rows a full rebuild
+    # costs nothing, so incremental would buy nothing and cost correctness.
+    #
+    # Not views: a view in another schema takes a catalog dependency on the
+    # public tables, which makes `Base.metadata.drop_all()` in
+    # backend/tests/test_object_ownership.py fail with an error that points
+    # nowhere near the cause.
+    +materialized: table
+
+    staging:
+      +schema: staging
+    intermediate:
+      +schema: intermediate
+    marts:
+      +schema: marts
+
+data_tests:
+  budgeting_analytics:
+    # Failing rows land in analytics_test_failures so a failure is
+    # inspectable rather than just a count. Safe inside the database; note a
+    # pg_dump would then carry them, which the *.sql gitignore rule already
+    # anticipates.
+    +store_failures: true
+    +schema: test_failures

@@ -1,0 +1,48 @@
+# Connection config. This file is COMMITTED to a public repo, so it must
+# contain zero literal credentials — every value is env_var().
+#
+# Two targets, and the split is a safety mechanism, not a convenience:
+#
+#   demo  (default)  budgeting_demo, synthetic seed data. Safe to screenshare,
+#                    safe to point `dbt docs` at, safe to let the Dagster UI
+#                    render row counts and column stats from.
+#   real             the live database wired to actual bank accounts. Requires
+#                    ANALYTICS_PGDATABASE_REAL to be set explicitly with NO
+#                    default, so a typo or an unset var fails loudly instead of
+#                    silently resolving to real financial data.
+#
+# The marts, dbt docs' catalog.json and the Dagster asset previews all render
+# whatever this points at. Defaulting to real data would make every one of
+# those a disclosure.
+
+budgeting:
+  target: "{{ env_var('DBT_TARGET', 'demo') }}"
+  outputs:
+
+    demo:
+      type: postgres
+      host: "{{ env_var('ANALYTICS_PGHOST', 'localhost') }}"
+      port: "{{ env_var('ANALYTICS_PGPORT', '5432') | int }}"
+      user: "{{ env_var('ANALYTICS_PGUSER', 'budget') }}"
+      password: "{{ env_var('ANALYTICS_PGPASSWORD', 'budget') }}"
+      dbname: "{{ env_var('ANALYTICS_PGDATABASE', 'budgeting_demo') }}"
+      # Base schema. dbt appends each model's custom schema to this, giving
+      # analytics_staging / analytics_intermediate / analytics_marts. Nothing
+      # is ever written to `public`.
+      schema: analytics
+      threads: 4
+      sslmode: prefer
+      # Fail fast rather than hanging if the db container is not up yet.
+      connect_timeout: 10
+
+    real:
+      type: postgres
+      host: "{{ env_var('ANALYTICS_PGHOST', 'localhost') }}"
+      port: "{{ env_var('ANALYTICS_PGPORT', '5432') | int }}"
+      user: "{{ env_var('ANALYTICS_PGUSER', 'budget') }}"
+      password: "{{ env_var('ANALYTICS_PGPASSWORD', 'budget') }}"
+      dbname: "{{ env_var('ANALYTICS_PGDATABASE_REAL') }}"
+      schema: analytics
+      threads: 4
+      sslmode: prefer
+      connect_timeout: 10

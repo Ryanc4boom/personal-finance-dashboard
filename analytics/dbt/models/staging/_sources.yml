@@ -1,0 +1,207 @@
+version: 2
+
+# The OLTP tables in `public`, owned by the FastAPI app and Alembic. dbt only
+# ever SELECTs from these — the budgeting_analytics role has no INSERT, UPDATE
+# or DELETE on any of them, so that is enforced by the database and not just by
+# convention.
+#
+# Columns are listed explicitly rather than left implicit. That is not
+# documentation for its own sake: two of these tables carry data the analytics
+# layer must never copy into another schema, and writing the column list out is
+# what makes an accidental `select *` show up in review.
+
+sources:
+  - name: budgeting
+    description: >
+      OLTP schema written by the FastAPI application. Read-only from here.
+    database: "{{ env_var('ANALYTICS_PGDATABASE', 'budgeting_demo') }}"
+    schema: public
+
+    # Freshness is checked against the app's own updated_at, not a load
+    # timestamp, because there is no load step — dbt reads the live tables.
+    tables:
+      - name: user
+        description: >
+          One row per person. `user` is a RESERVED WORD in PostgreSQL, so this
+          relation can only be referenced through source() (which dbt quotes).
+          Never write a bare `user` in hand-written SQL, and never name a CTE
+          `user` — dbt does not quote CTE names.
+        columns:
+          - name: id
+          - name: email
+          - name: timezone
+          - name: currency
+          - name: created_at
+          - name: updated_at
+        # auth_hash is deliberately absent.
+
+      - name: institution
+        columns:
+          - name: id
+          - name: provider_institution_id
+          - name: name
+          - name: created_at
+
+      - name: item
+        description: >
+          One linked bank login. `access_token` is Fernet ciphertext and is
+          absent here by design; the budgeting_analytics role has no SELECT
+          privilege on that column either, so `select *` against this table
+          fails rather than silently succeeding.
+        columns:
+          - name: id
+          - name: user_id
+          - name: institution_id
+          - name: provider_item_id
+          - name: status
+          - name: last_synced_at
+          - name: error_code
+          - name: created_at
+          - name: updated_at
+
+      - name: account
+        columns:
+          - name: id
+          - name: item_id
+          - name: name
+          - name: mask
+          - name: type
+          - name: subtype
+          - name: current_balance_cents
+          - name: available_balance_cents
+          - name: credit_limit_cents
+          - name: is_active
+          - name: created_at
+          - name: updated_at
+
+      - name: category
+        description: >
+          Two-level taxonomy. `user_id` is NULL for system categories and
+          `parent_id` is NULL for top-level ones — both nullable FKs, which is
+          why the tests downstream use relationships_where.
+        columns:
+          - name: id
+          - name: user_id
+          - name: parent_id
+          - name: slug
+          - name: name
+          - name: kind
+          - name: is_system
+          - name: sort_order
+
+      - name: merchant
+        description: >
+          `canonical_merchant_id` points an alias at its canonical row and is
+          NULL on the canonical row itself.
+        columns:
+          - name: id
+          - name: normalized_key
+          - name: display_name
+          - name: canonical_merchant_id
+          - name: default_category_id
+          - name: link_method
+          - name: link_score
+          - name: is_verified
+
+      - name: transaction
+        description: >
+          The grain of the core fact. Sign convention is the INVERSE of Plaid's
+          and is flipped exactly once, at ingestion; a DB CHECK ties `direction`
+          to the sign of `amount_cents`.
+        loaded_at_field: updated_at
+        freshness:
+          warn_after: {count: 36, period: hour}
+          error_after: {count: 7, period: day}
+        columns:
+          - name: id
+          - name: account_id
+          - name: provider_txn_id
+          - name: pending_provider_txn_id
+          - name: amount_cents
+          - name: direction
+          - name: date
+          - name: posted_date
+          - name: description_raw
+          - name: merchant_name
+          - name: merchant_id
+          - name: category_id
+          - name: category_source
+          - name: provider_category
+          - name: is_pending
+          - name: is_transfer
+          - name: is_recurring
+          - name: transfer_pair_id
+          - name: recurring_stream_id
+          - name: tags
+          - name: excluded_from_budget
+          - name: created_at
+          - name: updated_at
+        # `notes` is free-text the user typed. Not needed for any mart.
+
+      - name: raw_transaction
+        description: >
+          Append-only audit log of every Plaid delta. Used for exactly one
+          thing here — reconciling added-minus-removed against the live
+          transaction count, which is the only way to detect a hard delete.
+          `raw_payload` (jsonb) is the full provider response including account
+          numbers and masks and is deliberately NOT declared: copying it into a
+          second schema buys nothing and doubles the blast radius.
+        columns:
+          - name: id
+          - name: item_id
+          - name: provider
+          - name: provider_txn_id
+          - name: event_type
+          - name: received_at
+
+      - name: security
+        columns:
+          - name: id
+          - name: provider_security_id
+          - name: ticker_symbol
+          - name: name
+          - name: type
+          - name: asset_class
+          - name: close_price_cents
+          - name: close_price_as_of
+          - name: currency
+          - name: is_cash_equivalent
+
+      - name: holding
+        description: >
+          Periodic snapshot, keyed (id, as_of_date) because it is a TimescaleDB
+          hypertable partitioned on as_of_date. A plain `unique` test on `id`
+          fails on day two — the business grain is
+          (account_id, security_id, as_of_date).
+        loaded_at_field: created_at
+        freshness:
+          warn_after: {count: 36, period: hour}
+          error_after: {count: 7, period: day}
+        columns:
+          - name: id
+          - name: as_of_date
+          - name: account_id
+          - name: security_id
+          - name: quantity
+          - name: institution_price_cents
+          - name: institution_value_cents
+          - name: cost_basis_cents
+          - name: value_drift_cents
+          - name: created_at
+
+      - name: investment_transaction
+        columns:
+          - name: id
+          - name: account_id
+          - name: security_id
+          - name: provider_investment_txn_id
+          - name: type
+          - name: subtype
+          - name: amount_cents
+          - name: quantity
+          - name: price_cents
+          - name: fees_cents
+          - name: date
+          - name: description
+          - name: currency
+          - name: created_at

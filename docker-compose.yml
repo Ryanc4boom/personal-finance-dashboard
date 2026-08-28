@@ -54,6 +54,122 @@ services:
     profiles:
       - full
 
+  # --- Analytics layer (dbt + Dagster) ------------------------------------ #
+  # Both services share one image. Build context is the repo root so the image
+  # can carry backend/ as well — the Dagster assets import
+  # app.services.ingestion and app.services.research rather than
+  # reimplementing sync or the XBRL parser.
+  #
+  # Runs in Python 3.12. The host is on 3.14, where dbt-core installs and then
+  # dies inside mashumaro on the first command.
+
+  # One-shot, not a server: creates budgeting_demo and the restricted
+  # budgeting_analytics role. dbt creates schemas but never databases, so
+  # without this the first run fails with `FATAL: database does not exist`
+  # and no hint that a createdb was the missing step.
+  analytics-bootstrap:
+    build:
+      context: .
+      dockerfile: analytics/Dockerfile
+    image: budgeting_analytics
+    container_name: budgeting_analytics_bootstrap
+    environment:
+      PGHOST: db
+      PGPORT: "5432"
+      PGUSER: ${POSTGRES_USER:-budget}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-budget}
+      DEMO_DB: ${DEMO_DB:-budgeting_demo}
+    volumes:
+      - ./analytics:/opt/analytics
+    depends_on:
+      db:
+        condition: service_healthy
+    entrypoint: ["/opt/analytics/scripts/bootstrap_demo_db.sh"]
+    profiles:
+      - analytics
+
+  # Ad-hoc dbt runner: `docker compose run --rm dbt build`.
+  dbt:
+    build:
+      context: .
+      dockerfile: analytics/Dockerfile
+    image: budgeting_analytics
+    container_name: budgeting_dbt
+    environment:
+      ANALYTICS_PGHOST: db
+      ANALYTICS_PGPORT: "5432"
+      ANALYTICS_PGUSER: ${ANALYTICS_PGUSER:-budgeting_analytics}
+      ANALYTICS_PGPASSWORD: ${ANALYTICS_PGPASSWORD:-analytics}
+      ANALYTICS_PGDATABASE: ${DEMO_DB:-budgeting_demo}
+      DBT_TARGET: ${DBT_TARGET:-demo}
+    volumes:
+      - ./analytics:/opt/analytics
+      - ./backend:/opt/backend
+    working_dir: /opt/analytics/dbt
+    depends_on:
+      db:
+        condition: service_healthy
+    entrypoint: ["dbt"]
+    profiles:
+      - analytics
+
+  dagster:
+    build:
+      context: .
+      dockerfile: analytics/Dockerfile
+    image: budgeting_analytics
+    container_name: budgeting_dagster
+    environment:
+      ANALYTICS_PGHOST: db
+      ANALYTICS_PGPORT: "5432"
+      ANALYTICS_PGUSER: ${ANALYTICS_PGUSER:-budgeting_analytics}
+      ANALYTICS_PGPASSWORD: ${ANALYTICS_PGPASSWORD:-analytics}
+      ANALYTICS_PGDATABASE: ${DEMO_DB:-budgeting_demo}
+      DBT_TARGET: ${DBT_TARGET:-demo}
+      # The ingestion and research assets go through the app's own Settings,
+      # which reads DATABASE_URL. Points at the demo database for the same
+      # reason dbt does.
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-budget}:${POSTGRES_PASSWORD:-budget}@db:5432/${DEMO_DB:-budgeting_demo}
+      REDIS_URL: redis://redis:6379/0
+      DAGSTER_HOME: /opt/dagster_home
+    env_file:
+      # Supplies ENCRYPTION_KEY (needed to decrypt item.access_token in
+      # sync_item), PLAID_* and SEC_*/FINNHUB_API_KEY. Real env vars above win
+      # over anything in the file, so the demo database wiring cannot be
+      # overridden by a stale .env.
+      - .env
+    ports:
+      - "${DAGSTER_PORT:-3030}:3000"
+    volumes:
+      - ./analytics:/opt/analytics
+      - ./backend:/opt/backend
+      - dagsterhome:/opt/dagster_home
+    working_dir: /opt/analytics
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command:
+      - dagster
+      - dev
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "3000"
+      - --module-name
+      - dagster_budgeting.definitions
+    profiles:
+      - analytics
+
 volumes:
   pgdata:
   redisdata:
+  # Dagster instance state (runs, event log, schedule ticks) as SQLite on a
+  # named volume, NOT dagster-postgres in the app database. dagster-postgres
+  # would create ~12 tables plus its own `alembic_version` in `public`, and
+  # backend/alembic/env.py leaves include_schemas=False — so autogenerate would
+  # propose dropping all of them, and two revision histories would fight over
+  # one table. Keeping analytics objects out of `public` is what makes the
+  # existing Alembic setup safe by default.
+  dagsterhome:

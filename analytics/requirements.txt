@@ -1,0 +1,14 @@
+# Analytics layer dependencies.
+#
+# Deliberately NOT merged into backend/requirements.txt: the API has no reason
+# to carry dbt or Dagster, and the backend venv on this machine is Python 3.14,
+# which dbt-core does not support (it installs, then dies inside mashumaro on
+# the first command). The analytics layer therefore runs in its own 3.12
+# container rather than in a host venv.
+
+dbt-core>=1.9,<1.10
+dbt-postgres>=1.9,<1.10
+
+dagster>=1.9,<1.12
+dagster-dbt>=0.25,<0.28
+dagster-webserver>=1.9,<1.12

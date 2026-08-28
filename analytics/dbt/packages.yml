@@ -1,0 +1,16 @@
+# dbt_utils only.
+#
+# Used for: unique_combination_of_columns (the composite grains — `holding` is
+# keyed (id, as_of_date) so a plain `unique` on id fails on day one),
+# accepted_range, expression_is_true, and relationships_where (needed because
+# category.user_id is nullable, where NULL means "system category", and a plain
+# relationships test would fail on every one of them).
+#
+# Deliberately NOT installing dbt_expectations or Great Expectations — see the
+# rationale in analytics/README.md. Short version: this is one Postgres
+# database of ~10^3 rows with hard constraints already at the DB layer, and a
+# second quality framework outside the dbt DAG cannot stop a downstream model
+# from building on bad data, which is the entire requirement.
+packages:
+  - package: dbt-labs/dbt_utils
+    version: [">=1.3.0", "<2.0.0"]
