@@ -1,0 +1,328 @@
+version: 2
+
+# Tests on the staging layer catch a bad ASSUMPTION about the source; tests on
+# the marts catch a bad TRANSFORMATION. Both are worth having and they fail for
+# different reasons, so the same-looking test in both layers is not redundant.
+#
+# Every accepted_values list below is copied from app/models/enums.py. If
+# someone adds a new AccountType or CategorySource and does not update the
+# analytics layer, these fail loudly on the next run rather than letting an
+# unmapped value flow into a mart and land in an "other" bucket nobody checks.
+
+models:
+
+  # ---------------------------------------------------------------- users --- #
+  - name: stg_users
+    description: One row per person.
+    columns:
+      - name: user_id
+        data_tests: [not_null, unique]
+      - name: email
+        data_tests: [not_null, unique]
+      - name: user_currency
+        data_tests: [not_null]
+
+  # ---------------------------------------------------------------- items --- #
+  - name: stg_items
+    description: >
+      One linked bank login. Note `access_token` is absent by design and the
+      analytics role cannot read it.
+    columns:
+      - name: item_id
+        data_tests: [not_null, unique]
+      - name: user_id
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('stg_users')
+              field: user_id
+      - name: provider_item_id
+        data_tests: [not_null, unique]
+      - name: item_status
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: [good, login_required, pending_expiration, error, revoked]
+      - name: institution_id
+        description: Nullable — an item can exist before its institution is resolved.
+        data_tests:
+          - relationships:
+              to: ref('stg_institutions')
+              field: institution_id
+
+  # --------------------------------------------------------- institutions --- #
+  - name: stg_institutions
+    columns:
+      - name: institution_id
+        data_tests: [not_null, unique]
+      - name: provider_institution_id
+        data_tests: [not_null, unique]
+      - name: institution_name
+        data_tests: [not_null]
+
+  # ------------------------------------------------------------- accounts --- #
+  - name: stg_accounts
+    columns:
+      - name: account_id
+        data_tests: [not_null, unique]
+      - name: item_id
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('stg_items')
+              field: item_id
+      - name: account_type
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: [depository, credit, loan, investment, other]
+      - name: is_liability_account
+        data_tests: [not_null]
+
+  # ----------------------------------------------------------- categories --- #
+  - name: stg_categories
+    columns:
+      - name: category_id
+        data_tests: [not_null, unique]
+      - name: category_slug
+        data_tests: [not_null, unique]
+      - name: category_kind
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: [INCOME, EXPENSE, TRANSFER]
+      - name: user_id
+        description: >
+          NULL means "system category, visible to everyone". A plain
+          relationships test would therefore fail on every one of the ~100
+          seeded system categories on day one, which is why this is
+          relationships_where.
+        data_tests:
+          - dbt_utils.relationships_where:
+              to: ref('stg_users')
+              field: user_id
+              from_condition: user_id is not null
+      - name: parent_category_id
+        description: NULL on a top-level category. Same reason for the _where variant.
+        data_tests:
+          - dbt_utils.relationships_where:
+              to: ref('stg_categories')
+              field: category_id
+              from_condition: parent_category_id is not null
+
+  # ------------------------------------------------------------ merchants --- #
+  - name: stg_merchants
+    columns:
+      - name: merchant_id
+        data_tests: [not_null, unique]
+      - name: merchant_normalized_key
+        data_tests: [not_null]
+      - name: canonical_merchant_id
+        description: >
+          coalesce(canonical_merchant_id, id) — always populated, and always
+          points at a row that exists.
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('stg_merchants')
+              field: merchant_id
+      - name: merchant_link_score
+        data_tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 100
+              inclusive: true
+
+  # --------------------------------------------------------- transactions --- #
+  - name: stg_transactions
+    description: The grain of the core fact — one row per transaction.
+    data_tests:
+      - dbt_utils.expression_is_true:
+          expression: >
+            (direction = 'INFLOW'  and signed_amount_cents >= 0) or
+            (direction = 'OUTFLOW' and signed_amount_cents <= 0)
+    columns:
+      - name: transaction_id
+        data_tests: [not_null, unique]
+      - name: provider_txn_id
+        description: >
+          UNIQUE at the source. This is the idempotency key the ingestion
+          pipeline upserts on, so a duplicate here would mean a replayed Plaid
+          delta had created a second row — the exact failure the pipeline
+          exists to prevent.
+        data_tests: [not_null, unique]
+      - name: account_id
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('stg_accounts')
+              field: account_id
+      - name: signed_amount_cents
+        description: >
+          Pass-through of the source's `amount_cents`, which is ALREADY SIGNED:
+          INFLOW >= 0, OUTFLOW <= 0, enforced by ck_transaction_direction_sign.
+          The expression_is_true test below re-asserts that pairing at this
+          layer, which is not tautological — the DB guarantees it in `public`,
+          this catches a sign flip introduced by a dbt model.
+        data_tests: [not_null]
+      - name: abs_amount_cents
+        description: Magnitude. Always >= 0 by construction; asserted anyway.
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+              inclusive: true
+      - name: direction
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: [INFLOW, OUTFLOW]
+      - name: transaction_date
+        data_tests: [not_null]
+      - name: category_source
+        description: Nullable — an uncategorised row may have no source yet.
+        data_tests:
+          - accepted_values:
+              values: [USER, RULE, MERCHANT, PROVIDER, UNCATEGORIZED]
+      - name: category_id
+        data_tests:
+          - dbt_utils.relationships_where:
+              to: ref('stg_categories')
+              field: category_id
+              from_condition: category_id is not null
+      - name: merchant_id
+        data_tests:
+          - dbt_utils.relationships_where:
+              to: ref('stg_merchants')
+              field: merchant_id
+              from_condition: merchant_id is not null
+      - name: transfer_pair_id
+        description: >
+          Self-referencing: points at the other leg of an internal transfer.
+          The pair must net to zero — see
+          tests/assert_transfer_pairs_net_to_zero.sql, which is the single most
+          important test in this project.
+        data_tests:
+          - dbt_utils.relationships_where:
+              to: ref('stg_transactions')
+              field: transaction_id
+              from_condition: transfer_pair_id is not null
+      - name: is_pending
+        data_tests: [not_null]
+      - name: is_transfer
+        data_tests: [not_null]
+      - name: excluded_from_budget
+        data_tests: [not_null]
+
+  # ----------------------------------------------------- raw transactions --- #
+  - name: stg_raw_transactions
+    description: >
+      Append-only Plaid delta log. Empty in the demo database, because the
+      seeds write `transaction` rows directly rather than driving them through
+      services/ingestion — which is exactly why the reconciliation test that
+      consumes this is scoped per item rather than globally.
+    columns:
+      - name: raw_transaction_id
+        data_tests: [not_null, unique]
+      - name: event_type
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: [added, modified, removed]
+      - name: item_id
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('stg_items')
+              field: item_id
+
+  # ----------------------------------------------------------- securities --- #
+  - name: stg_securities
+    columns:
+      - name: security_id
+        data_tests: [not_null, unique]
+      - name: provider_security_id
+        data_tests: [not_null, unique]
+      - name: security_type
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: [EQUITY, ETF, MUTUAL_FUND, CRYPTO, FIXED_INCOME, CASH_EQUIVALENT]
+      - name: asset_class
+        description: >
+          Deliberately NOT derivable from security_type — an ETF may hold US
+          equity, bonds or REITs. Two axes, two columns, two tests.
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: [US_EQUITY, INTERNATIONAL_EQUITY, FIXED_INCOME, CRYPTO, REAL_ESTATE, CASH]
+      - name: ticker_symbol
+        description: >
+          Nullable (a money-market sweep has no ticker), upper-cased and
+          trimmed. This is the conformed key to the SEC research marts.
+
+  # ------------------------------------------------------------- holdings --- #
+  - name: stg_holdings
+    description: >
+      Periodic snapshot. Grain is (account_id, security_id, as_of_date), NOT
+      holding_id — the source is a hypertable keyed (id, as_of_date).
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [account_id, security_id, as_of_date]
+    columns:
+      - name: holding_id
+        description: >
+          NOT unique on its own. Intentionally has no `unique` test: `id`
+          repeats across as_of_date partitions, so a unique test here would
+          pass on a one-day demo and fail the moment a second snapshot lands.
+        data_tests: [not_null]
+      - name: as_of_date
+        data_tests: [not_null]
+      - name: account_id
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('stg_accounts')
+              field: account_id
+      - name: security_id
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('stg_securities')
+              field: security_id
+      - name: quantity
+        data_tests: [not_null]
+      - name: institution_value_cents
+        data_tests: [not_null]
+
+  # -------------------------------------------- investment transactions --- #
+  - name: stg_investment_transactions
+    columns:
+      - name: investment_transaction_id
+        data_tests: [not_null, unique]
+      - name: provider_investment_txn_id
+        data_tests: [not_null, unique]
+      - name: account_id
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('stg_accounts')
+              field: account_id
+      - name: security_id
+        description: Nullable — a cash sweep or account fee has no security.
+        data_tests:
+          - dbt_utils.relationships_where:
+              to: ref('stg_securities')
+              field: security_id
+              from_condition: security_id is not null
+      - name: investment_transaction_type
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: [BUY, SELL, DIVIDEND, INTEREST, FEE, TRANSFER]
+      - name: transaction_date
+        data_tests: [not_null]
+      - name: amount_cents
+        data_tests: [not_null]
+      - name: is_external_flow
+        data_tests: [not_null]

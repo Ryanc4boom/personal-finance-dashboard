@@ -1,0 +1,44 @@
+version: 2
+
+models:
+  - name: dim_time
+    description: >
+      One row per calendar day, spanning every date any fact refers to, padded
+      out to whole months. Built with native generate_series so the bounds are
+      resolved at run time from the data rather than hardcoded.
+    data_tests:
+      - dbt_utils.expression_is_true:
+          expression: "date_key = to_char(date_day, 'YYYYMMDD')::int"
+    columns:
+      - name: date_day
+        data_tests: [not_null, unique]
+      - name: date_key
+        description: Integer YYYYMMDD surrogate. Sorts correctly; readable in a filter.
+        data_tests: [not_null, unique]
+      - name: year_number
+        data_tests: [not_null]
+      - name: month_number
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range: {min_value: 1, max_value: 12, inclusive: true}
+      - name: quarter_number
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range: {min_value: 1, max_value: 4, inclusive: true}
+      - name: iso_day_of_week
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range: {min_value: 1, max_value: 7, inclusive: true}
+      - name: month_start_date
+        data_tests: [not_null]
+      - name: week_start_date
+        description: ISO week start (Monday), matching iso_day_of_week.
+        data_tests: [not_null]
+      - name: quarter_start_date
+        data_tests: [not_null]
+      - name: year_start_date
+        data_tests: [not_null]
+      - name: is_weekend
+        data_tests: [not_null]
+      - name: is_month_end
+        data_tests: [not_null]
