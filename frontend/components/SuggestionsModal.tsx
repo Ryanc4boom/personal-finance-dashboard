@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Sparkles, X } from "lucide-react";
 import { applySuggestions, getSuggestions } from "@/lib/api";
 import { formatCents } from "@/lib/format";
@@ -148,18 +148,44 @@ export default function SuggestionsModal({ onClose, onApplied }: Props) {
   );
 }
 
+/**
+ * Open overlays, innermost last. Escape must dismiss only the top one —
+ * a confirmation prompt opened from inside a modal would otherwise close both,
+ * throwing away the edits behind it on the way out.
+ */
+const stack: symbol[] = [];
+
 export function Overlay({
   children,
   onClose,
+  maxWidth = "max-w-2xl",
 }: {
   children: React.ReactNode;
   onClose: () => void;
+  /** Tailwind max-width class. A confirmation prompt wants to be narrow. */
+  maxWidth?: string;
 }) {
+  // Read through a ref so the registration effect can be mount-only. Callers
+  // pass inline arrow functions; depending on `onClose` directly would re-run
+  // the effect on every parent render and push this overlay back to the top of
+  // the stack, stealing Escape from whatever is genuinely in front of it.
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    const token = Symbol("overlay");
+    stack.push(token);
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && stack[stack.length - 1] === token) closeRef.current();
+    };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      stack.splice(stack.indexOf(token), 1);
+    };
+  }, []);
 
   return (
     <div
@@ -167,7 +193,7 @@ export function Overlay({
       onClick={onClose}
     >
       <div
-        className="w-full max-w-2xl overflow-hidden rounded-xl bg-white shadow-xl"
+        className={`w-full ${maxWidth} overflow-hidden rounded-xl bg-white shadow-xl`}
         onClick={(e) => e.stopPropagation()}
       >
         {children}

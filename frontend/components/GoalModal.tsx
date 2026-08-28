@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { Trash2, X } from "lucide-react";
+import ConfirmDestructiveModal from "@/components/ConfirmDestructiveModal";
 import { Overlay } from "@/components/SuggestionsModal";
 import { createGoal, deleteGoal, updateGoal } from "@/lib/api";
 import { formatCents } from "@/lib/format";
@@ -66,6 +67,7 @@ export default function GoalModal({
   const [linked, setLinked] = useState<string[]>(goal?.linked_account_ids ?? []);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   const linkedTotal = useMemo(
     () =>
@@ -112,17 +114,16 @@ export default function GoalModal({
     }
   }
 
+  /**
+   * Called by the confirmation prompt, which owns the busy state and reports a
+   * failure in place — closing on a failed delete would tell the user the goal
+   * was gone while it is still there.
+   */
   async function remove() {
     if (!goal) return;
-    setBusy(true);
-    try {
-      await deleteGoal(goal.id);
-      onSaved();
-      onClose();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not delete the goal");
-      setBusy(false);
-    }
+    await deleteGoal(goal.id);
+    onSaved();
+    onClose();
   }
 
   return (
@@ -287,7 +288,7 @@ export default function GoalModal({
         {goal ? (
           <button
             type="button"
-            onClick={remove}
+            onClick={() => setConfirmingDelete(true)}
             disabled={busy}
             className="flex items-center gap-1.5 text-sm text-rose-600 hover:text-rose-700 disabled:opacity-50"
           >
@@ -316,6 +317,24 @@ export default function GoalModal({
           </button>
         </div>
       </div>
+
+      {confirmingDelete && goal && (
+        <ConfirmDestructiveModal
+          title={`Delete "${goal.name}"?`}
+          body={
+            <>
+              The goal, its {formatCents(goal.target_amount_cents)} target and the
+              progress recorded against it are deleted permanently. This cannot be
+              undone.
+              {linked.length > 0 &&
+                " The linked accounts are not affected — only the goal reading from them."}
+            </>
+          }
+          confirmLabel="Delete goal"
+          onConfirm={remove}
+          onClose={() => setConfirmingDelete(false)}
+        />
+      )}
     </Overlay>
   );
 }

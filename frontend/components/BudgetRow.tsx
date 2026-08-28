@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Check, Pencil, Trash2, X } from "lucide-react";
+import ConfirmDestructiveModal from "@/components/ConfirmDestructiveModal";
 import { formatCents } from "@/lib/format";
 import type { BudgetLine, PacingStatus } from "@/lib/types";
 
@@ -60,6 +61,7 @@ export default function BudgetRow({ line, onSave, onDelete, onDrillDown }: Props
   const [draft, setDraft] = useState((line.limit_cents / 100).toFixed(2));
   const [rollover, setRollover] = useState(line.rollover_enabled);
   const [busy, setBusy] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
 
   const tone = STATUS[line.status];
   const available = line.available_cents;
@@ -211,7 +213,7 @@ export default function BudgetRow({ line, onSave, onDelete, onDrillDown }: Props
             </button>
             <button
               type="button"
-              onClick={() => onDelete(line.category_id)}
+              onClick={() => setConfirmingDelete(true)}
               className="rounded-md px-2 py-1 text-xs text-rose-500 hover:text-rose-700"
               aria-label={`Remove ${line.category_name} budget`}
             >
@@ -219,6 +221,23 @@ export default function BudgetRow({ line, onSave, onDelete, onDrillDown }: Props
             </button>
           </div>
         </div>
+      )}
+
+      {confirmingDelete && (
+        <ConfirmDestructiveModal
+          title={`Remove the ${line.category_name} budget?`}
+          body={
+            <>
+              The {formatCents(line.limit_cents)} limit
+              {line.rollover_enabled && " and any rolled-over balance"} will be deleted.
+              This cannot be undone. Transactions in this category are not affected —
+              the category simply stops being budgeted.
+            </>
+          }
+          confirmLabel="Remove budget"
+          onConfirm={() => onDelete(line.category_id)}
+          onClose={() => setConfirmingDelete(false)}
+        />
       )}
     </div>
   );
