@@ -171,7 +171,15 @@ charting library) for the balance/net-worth/allocation/forecast views.
 ```bash
 cp .env.example .env
 python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"  # paste into ENCRYPTION_KEY
+python3 -c "import secrets; print(secrets.token_urlsafe(32))"                               # paste into API_KEY
+
+git config core.hooksPath .githooks   # blocks secrets and dumps from being committed
 ```
+
+`API_KEY` has no default and the API refuses every request without it — an auth
+gate that ships with a fallback is one somebody forgets to change. The same
+value goes in `frontend/.env.local` as `NEXT_PUBLIC_API_KEY` in step 4; if the
+two disagree the UI reports it rather than failing as a network error.
 
 ### 2. Start Postgres + Redis, run migrations
 
@@ -200,7 +208,13 @@ Every seed is idempotent and namespaced under `DEMO_*` provider ids, so
 cd ../frontend && npm install && cp .env.local.example .env.local && npm run dev
 ```
 
-Open <http://localhost:3000>. API docs at <http://localhost:8000/docs>.
+Put the `API_KEY` from step 1 into `frontend/.env.local` as `NEXT_PUBLIC_API_KEY`
+before starting the dev server — Next.js inlines it at build time, so a change
+needs a restart.
+
+Open <http://localhost:3000>. API docs at <http://localhost:8000/docs>. The docs
+page loads, but calls from it answer 401 without the key; use `curl -H
+"X-API-Key: …"` or the app itself.
 
 ### Optional: link a real bank instead (Plaid Sandbox)
 
