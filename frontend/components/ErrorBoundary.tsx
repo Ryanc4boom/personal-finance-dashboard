@@ -2,6 +2,7 @@
 
 import { Component, type ReactNode } from "react";
 import { AlertTriangle, RefreshCw } from "lucide-react";
+import { captureError } from "@/lib/telemetry";
 
 interface Props {
   children: ReactNode;
@@ -43,11 +44,12 @@ export default class ErrorBoundary extends Component<Props, State> {
     return { error };
   }
 
-  componentDidCatch(error: Error, info: unknown) {
-    // Kept to the console rather than sent anywhere: a component tree in this
-    // app can hold balances and merchant names, and this payload is not
-    // scrubbed. Telemetry goes through lib/telemetry.ts, which is.
-    console.error(`[error-boundary] ${this.props.label}`, error, info);
+  componentDidCatch(error: Error) {
+    // Note what is *not* passed: React's `info` argument is the component
+    // stack, and the props rendered in it include account names and amounts.
+    // captureError redacts the message; there is no scrubber for a component
+    // stack, so it does not travel.
+    captureError(error, this.props.label);
   }
 
   handleRetry = () => {

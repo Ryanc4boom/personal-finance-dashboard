@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import Link from "next/link";
 import { AlertTriangle, RefreshCw } from "lucide-react";
+import { captureError } from "@/lib/telemetry";
 
 /**
  * Route-segment fallback: catches anything a page throws that the in-page
@@ -23,9 +24,7 @@ export default function RouteError({
   reset: () => void;
 }) {
   useEffect(() => {
-    // Console only. A render error's message can contain interpolated account
-    // or merchant values, and nothing here scrubs them.
-    console.error("[route-error]", error);
+    captureError(error, "route");
   }, [error]);
 
   return (

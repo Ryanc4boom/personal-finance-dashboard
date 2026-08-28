@@ -89,6 +89,17 @@ class Settings(BaseSettings):
     # the limiter, so unsigned junk is cheap to shed here.
     rate_limit_webhook_per_minute: int = 60
 
+    # ---- Error reporting (see core/telemetry.py) ----
+    # Blank disables it entirely. Everything forwarded is scrubbed first — no
+    # request bodies, no frame locals, no amounts — because the payloads in this
+    # app are balances and merchant names.
+    sentry_dsn: str = ""
+    sentry_environment: str = "development"
+    # Performance tracing off by default. Spans carry SQL statements and their
+    # bound parameters, which is exactly the data this app should not be
+    # shipping off the machine; turn it on only with a scrubbed span processor.
+    sentry_traces_sample_rate: float = 0.0
+
     # ---- Phase 5: SEC EDGAR + market data ----
     # SEC rejects requests without a declaring User-Agent that carries a contact
     # address (403, not 429), so this is not optional decoration. Left blank it

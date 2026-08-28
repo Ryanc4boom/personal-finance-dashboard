@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import { captureError } from "@/lib/telemetry";
 
 /**
  * Fallback for errors thrown by the root layout itself.
@@ -22,7 +23,7 @@ export default function GlobalError({
   reset: () => void;
 }) {
   useEffect(() => {
-    console.error("[global-error]", error);
+    captureError(error, "root-layout");
   }, [error]);
 
   return (

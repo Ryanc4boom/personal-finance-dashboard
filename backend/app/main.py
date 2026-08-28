@@ -7,6 +7,7 @@ from app.core.auth import ApiKeyMiddleware
 from app.core.config import settings
 from app.core.headers import SecurityHeadersMiddleware
 from app.core.rate_limit import RateLimitMiddleware
+from app.core.telemetry import init_telemetry
 from app.routers import (
     accounts,
     budgets,
@@ -24,6 +25,11 @@ from app.routers import (
 )
 
 logging.basicConfig(level=logging.INFO)
+
+# Before the app is built. Sentry instruments by patching, so anything
+# constructed earlier is invisible to it — and a crash during startup is
+# precisely the one worth capturing. No-ops unless SENTRY_DSN is set.
+init_telemetry()
 
 app = FastAPI(
     title="Budgeting Platform API",
