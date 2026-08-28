@@ -35,10 +35,39 @@ staged=$(git diff --cached --name-only --diff-filter=ACM)
 # .sql is here because pg_dump's default output is plain .sql, and a dump of
 # this database carries live Plaid access tokens plus every real transaction —
 # a worse leak than .env itself.
+#
+# The dbt project is the one legitimate source of .sql here — its models,
+# macros and singular tests are code, not data. The identical blanket rule in
+# .gitignore silently ignored every one of them until it was negated, and this
+# hook would have made the same file untrackable a second way.
+#
+# The exemption is narrow on purpose: specific directories, not "*.sql anywhere
+# under analytics/". It is also paid for, not free — the dump-shaped-content
+# check still runs on these paths, so a pg_dump renamed into
+# analytics/dbt/models/ is caught by what is inside it rather than waved
+# through by where it sits.
+is_dbt_sql() {
+    case "$1" in
+        analytics/dbt/models/*.sql|analytics/dbt/macros/*.sql|analytics/dbt/tests/*.sql|analytics/ddl/*.sql)
+            return 0 ;;
+    esac
+    return 1
+}
+
 while IFS= read -r file; do
     case "$file" in
         *.example|*.example.*|.githooks/*) continue ;;
     esac
+    if is_dbt_sql "$file"; then
+        # A dbt model SELECTs; it never carries rows. Any of these means the
+        # file is data wearing a model's file extension.
+        if git show ":$file" | grep -qiE '^(INSERT INTO|COPY .* FROM stdin|PGDMP|-- PostgreSQL database dump)'; then
+            note "BLOCKED  $file"
+            note "         Exempted as a dbt model, but contains dump-shaped rows."
+            fail=1
+        fi
+        continue
+    fi
     case "$file" in
         .env|.env.*|*/.env|*/.env.*|*.pem|*.key|*.p12|*.pfx|*.keystore|id_rsa*|*.sql|*.dump|*.bak|*.backup)
             note "BLOCKED  $file"
