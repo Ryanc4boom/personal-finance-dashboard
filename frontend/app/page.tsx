@@ -4,6 +4,7 @@ import { Suspense, useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { AlertCircle, RefreshCw } from "lucide-react";
 import CreateRuleModal from "@/components/CreateRuleModal";
+import ErrorBoundary from "@/components/ErrorBoundary";
 import LedgerFiltersBar from "@/components/LedgerFilters";
 import LinkAccountButton from "@/components/LinkAccountButton";
 import SummaryCards from "@/components/SummaryCards";
@@ -172,6 +173,14 @@ function Ledger() {
     setFilters((f) => ({ ...f }));
   }
 
+  /** Drop the current rows, then refetch. See the boundary around the table. */
+  function retryTransactions() {
+    setTransactions([]);
+    setTotal(0);
+    setLoading(true);
+    setFilters((f) => ({ ...f }));
+  }
+
   /**
    * Recategorize one row. The response is patched in place rather than
    * refetching the page: a refetch under a "needs a category" filter would make
@@ -235,10 +244,14 @@ function Ledger() {
             <RefreshCw className={`h-4 w-4 ${busy ? "animate-spin" : ""}`} />
             Re-run rules
           </button>
-          <LinkAccountButton
-            onLinked={refresh}
-            onError={(message) => reportError("action", message)}
-          />
+          {/* Isolated because this one mounts third-party Plaid Link code. A
+              throw inside it must not take the ledger down with it. */}
+          <ErrorBoundary label="Account linking">
+            <LinkAccountButton
+              onLinked={refresh}
+              onError={(message) => reportError("action", message)}
+            />
+          </ErrorBoundary>
         </div>
       </header>
 
@@ -262,13 +275,15 @@ function Ledger() {
         </div>
       )}
 
-      <SummaryCards
-        summary={summary}
-        activeAccountId={filters.accountId}
-        activeAccountType={filters.accountType}
-        onSelectAccount={selectAccount}
-        onSelectType={selectType}
-      />
+      <ErrorBoundary label="Account balances" onRetry={loadSummary}>
+        <SummaryCards
+          summary={summary}
+          activeAccountId={filters.accountId}
+          activeAccountType={filters.accountType}
+          onSelectAccount={selectAccount}
+          onSelectType={selectType}
+        />
+      </ErrorBoundary>
 
       <LedgerFiltersBar
         filters={filters}
@@ -280,15 +295,23 @@ function Ledger() {
         onReset={reset}
       />
 
-      <TransactionTable
-        transactions={transactions}
-        categories={categories}
-        loading={loading}
-        total={total}
-        saving={saving}
-        onRecategorize={recategorize}
-        onCreateRule={setRuleTarget}
-      />
+      {/* Retry refetches rather than just remounting: if the table threw, it
+          almost certainly threw on a row it is still holding, and remounting
+          would hand it the same row again. Clearing the rows first matters —
+          the boundary's own reset is batched with this one, so without it the
+          table would re-render the offending row before the refetch lands and
+          throw straight back into the fallback. */}
+      <ErrorBoundary label="The transaction table" onRetry={retryTransactions}>
+        <TransactionTable
+          transactions={transactions}
+          categories={categories}
+          loading={loading}
+          total={total}
+          saving={saving}
+          onRecategorize={recategorize}
+          onCreateRule={setRuleTarget}
+        />
+      </ErrorBoundary>
 
       {ruleTarget && (
         <CreateRuleModal

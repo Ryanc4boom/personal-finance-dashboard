@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { AlertCircle, Info, TrendingUp } from "lucide-react";
 import AllocationDonut from "@/components/AllocationDonut";
+import ErrorBoundary from "@/components/ErrorBoundary";
 import HoldingsTable from "@/components/HoldingsTable";
 import StatCard from "@/components/StatCard";
 import { getPortfolio } from "@/lib/api";
@@ -190,7 +191,12 @@ export default function InvestmentsPage() {
             <h2 className="border-b border-slate-200 px-5 py-3 text-sm font-semibold text-slate-900">
               Holdings
             </h2>
-            <HoldingsTable positions={portfolio.positions} />
+            {/* The widest surface on this page: one position with an
+                unexpected shape should not cost the user the allocation
+                breakdown and the summary cards above it. */}
+            <ErrorBoundary label="The holdings table">
+              <HoldingsTable positions={portfolio.positions} />
+            </ErrorBoundary>
           </section>
         </>
       )}
