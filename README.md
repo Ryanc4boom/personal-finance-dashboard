@@ -288,7 +288,17 @@ make demo-reset    # drop the demo database and do it all again
 `make demo` targets **`budgeting_demo`**, a separate database of synthetic
 fixtures. That matters more than it looks: the marts, `dbt docs` and the Dagster
 UI all faithfully render whatever they point at, and pointed at the development
-database every one of them is a picture of somebody's real finances.
+database every one of them is a picture of somebody's real finances. Every
+screenshot below is of `budgeting_demo` for exactly that reason.
+
+![Dagster lineage from Plaid ingestion to fact_transactions](docs/screenshots/analytics-dagster-pipeline.png)
+
+Filtered to `+key:"marts/fact_transactions"`. This is the whole argument for
+Dagster in one picture: `plaid_sync` is a real upstream node, not a preceding
+task, so every dbt model downstream of it knows the ingestion is its parent —
+and each model carries its own passing check count (`20 / 20` on
+`stg_transactions`, `30 / 30` on `fact_transactions`) rather than hiding
+inside one opaque `dbt build` box.
 
 ### The model
 
@@ -311,6 +321,15 @@ Conformed dimensions: `dim_time`, `dim_accounts`, `dim_categories`,
 dimension**, and it joins two source systems that agree on nothing else — Plaid
 issues its own security id per item, the SEC issues CIKs, neither has heard of
 the other. Ticker is the only value both emit for the same company.
+
+![Two source systems converging on dim_companies](docs/screenshots/analytics-conformed-dimension.png)
+
+Filtered to `+key:"marts/dim_companies"`: `plaid_sync` and `research_snapshot`
+enter from two unrelated APIs and meet in one dimension. The normalisation that
+makes the join work — `nullif(upper(trim(…)), '')`, applied identically on both
+sides — happens in staging rather than at the join, because if only one side
+normalises the join returns *zero rows* and reports it as "no research
+available" rather than as an error.
 
 Some decisions worth defending:
 
@@ -417,6 +436,14 @@ life, and a check that accepts everything passes any happy-path test.
 The sharpest demonstration: lower-casing the ticker in one staging model left
 **349 of 350 nodes green** and only the conformance test red. Nothing else in
 the suite can see a join that silently matches nothing.
+
+![dbt lineage graph: sources through staging and marts to the singular tests](docs/screenshots/analytics-dbt-lineage.png)
+
+`make dbt-docs`. Green nodes on the left are sources — the OLTP tables and the
+`analytics_landing` research tables — flowing right through staging and the
+marts. The terminal nodes on the right are the singular tests: they sit
+*downstream* of the models they guard, which is why `dbt build` can skip a
+model's dependents the moment one of them fails.
 
 ### Security notes specific to this layer
 
