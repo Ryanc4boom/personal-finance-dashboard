@@ -103,9 +103,18 @@ dbt-build:  ## Rebuild and test the warehouse (safe to re-run)
 dbt-test:  ## Run the tests only, against whatever is already built
 	$(COMPOSE) run --rm dbt test
 
+# Two things have to be true for :8085 to answer on the host, and neither is
+# the default. `--service-ports` publishes the port compose declares for the
+# dbt service — without the `ports:` entry there it publishes nothing — and
+# `--host 0.0.0.0` is needed because dbt binds the docs server to 127.0.0.1,
+# which inside a container means the container's own loopback and nothing else.
+# Both failures look identical and neither prints an error: dbt still says
+# "navigate to http://localhost:8085" because it is describing the inside of
+# the container. Binding 0.0.0.0 is not a widening here — the container has no
+# other route in, so reachability is exactly what the port publish above grants.
 dbt-docs:  ## Serve dbt's lineage graph on :8085
 	$(COMPOSE) run --rm --service-ports --entrypoint sh dbt -c \
-		"dbt docs generate && dbt docs serve --port 8085 --no-browser"
+		"dbt docs generate && dbt docs serve --host 0.0.0.0 --port 8085 --no-browser"
 
 # --------------------------------------------------------------------------- #
 # Dagster

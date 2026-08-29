@@ -106,6 +106,15 @@ services:
       - ./analytics:/opt/analytics
       - ./backend:/opt/backend
     working_dir: /opt/analytics/dbt
+    # Only `dbt docs serve` uses this, and only via `make dbt-docs`, which
+    # passes --service-ports. `docker compose run` ignores a service's ports
+    # unless that flag is given, so declaring one here costs the other dbt
+    # invocations nothing — and without it `--service-ports` has nothing to
+    # publish. That failure is quiet in the worst way: dbt still prints
+    # "navigate to http://localhost:8085" because it is describing the inside
+    # of the container, and the host gets connection refused.
+    ports:
+      - "${DBT_DOCS_PORT:-8085}:8085"
     depends_on:
       db:
         condition: service_healthy
