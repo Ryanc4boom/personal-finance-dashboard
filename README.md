@@ -360,7 +360,15 @@ Chosen on fit, and the tradeoff is written down rather than hidden.
   An Airflow DAG would show one opaque `dbt build` task and the lineage would
   live only in dbt docs.
 - Every dbt test becomes an **asset check** attached to the model it tests —
-  245 of them — instead of pass/fail buried in a run log.
+  318 of them — instead of pass/fail buried in a run log.
+  The remaining **4 of the 322 cannot be**, and it is worth knowing which: an
+  asset check belongs to exactly one asset, so the cross-model reconciliations
+  have nowhere to attach — `assert_facts_not_empty`,
+  `assert_research_conforms_to_portfolio`, `assert_transaction_count_reconciles`
+  and `assert_unknown_members_exist`. They still run and still fail the build,
+  but as a failed *step* rather than a failed check. Two of them are the
+  vacuous-green guards, so judging health from the asset-check panel alone is
+  exactly the wrong instinct — read the build result.
 - Asset semantics ("this table should exist and be fresh") match idempotent
   full-refresh better than task semantics ("run this, then that").
 - One container beside the existing `db`/`redis`, versus Airflow's webserver +
