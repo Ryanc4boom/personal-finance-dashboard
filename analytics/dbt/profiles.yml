@@ -14,6 +14,15 @@
 # The marts, dbt docs' catalog.json and the Dagster asset previews all render
 # whatever this points at. Defaulting to real data would make every one of
 # those a disclosure.
+#
+# The credential defaults below are `budgeting_analytics`, NOT the `budget`
+# superuser, and that is the same argument. docker-compose always sets these,
+# so the defaults only apply when dbt runs outside compose — and there the
+# wrong default does not fail, it succeeds with more privilege than intended:
+# `dbt debug` prints "OK connection ok" while connected as the database owner.
+# The restricted role is what makes "marts never land in public" a database
+# guarantee rather than a convention, so the fallback has to be the safe
+# identity rather than the one most likely to already exist.
 
 budgeting:
   target: "{{ env_var('DBT_TARGET', 'demo') }}"
@@ -23,8 +32,8 @@ budgeting:
       type: postgres
       host: "{{ env_var('ANALYTICS_PGHOST', 'localhost') }}"
       port: "{{ env_var('ANALYTICS_PGPORT', '5432') | int }}"
-      user: "{{ env_var('ANALYTICS_PGUSER', 'budget') }}"
-      password: "{{ env_var('ANALYTICS_PGPASSWORD', 'budget') }}"
+      user: "{{ env_var('ANALYTICS_PGUSER', 'budgeting_analytics') }}"
+      password: "{{ env_var('ANALYTICS_PGPASSWORD', 'analytics') }}"
       dbname: "{{ env_var('ANALYTICS_PGDATABASE', 'budgeting_demo') }}"
       # Base schema. dbt appends each model's custom schema to this, giving
       # analytics_staging / analytics_intermediate / analytics_marts. Nothing
@@ -39,8 +48,8 @@ budgeting:
       type: postgres
       host: "{{ env_var('ANALYTICS_PGHOST', 'localhost') }}"
       port: "{{ env_var('ANALYTICS_PGPORT', '5432') | int }}"
-      user: "{{ env_var('ANALYTICS_PGUSER', 'budget') }}"
-      password: "{{ env_var('ANALYTICS_PGPASSWORD', 'budget') }}"
+      user: "{{ env_var('ANALYTICS_PGUSER', 'budgeting_analytics') }}"
+      password: "{{ env_var('ANALYTICS_PGPASSWORD', 'analytics') }}"
       dbname: "{{ env_var('ANALYTICS_PGDATABASE_REAL') }}"
       schema: analytics
       threads: 4
