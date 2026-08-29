@@ -478,6 +478,11 @@ def seed(db) -> dict:
         accounts_by_provider[spec.provider_id] = account
         result.accounts += 1
 
+        # Cash a contribution has to cover, per month. Accumulated across every
+        # position because one payroll deduction funds all of that month's buys,
+        # not one per fund.
+        funding_needed_cents: dict[date, int] = {}
+
         for position in spec.positions:
             security = securities[position.ticker]
             price_spec = price_specs[position.ticker]
@@ -495,6 +500,7 @@ def seed(db) -> dict:
                     seq += 1
                     bought_cents = _cents(position.monthly_qty * price)
                     basis_cents += bought_cents
+                    funding_needed_cents[on] = funding_needed_cents.get(on, 0) + bought_cents
                     db.add(
                         InvestmentTransaction(
                             account_id=account.id,
@@ -543,6 +549,44 @@ def seed(db) -> dict:
                     )
                 )
                 result.holdings += 1
+
+        # --- the contribution that pays for those buys --------------------- #
+        # Without this the fixture is quietly incoherent: shares appear every
+        # month, bought with cash that never entered the account. Nothing in
+        # the app noticed, because a BUY is cash-neutral at the account level
+        # and no code path asked where the cash came from.
+        #
+        # It matters beyond realism. TRANSFER is the *only* member of
+        # EXTERNAL_FLOW_TYPES, so a fixture with no TRANSFER rows leaves
+        # is_external_flow false on every row in the database. Every assertion
+        # about contribution-versus-return then passes without evaluating
+        # anything — the vacuous green this whole layer is built to avoid — and
+        # return attribution, whose entire job is separating deposited money
+        # from market movement, has no deposited money to separate.
+        #
+        # Dividends are deliberately NOT netted off the contribution. A
+        # distribution is return the portfolio generated, not money the user
+        # added; treating it as funding would understate contributions and
+        # inflate measured return by exactly the dividend.
+        for on, needed_cents in sorted(funding_needed_cents.items()):
+            seq += 1
+            db.add(
+                InvestmentTransaction(
+                    account_id=account.id,
+                    security_id=None,  # cash arriving, not an instrument
+                    provider_investment_txn_id=f"DEMO-IT-{spec.provider_id}-{seq}",
+                    type=InvestmentTransactionType.TRANSFER.value,
+                    subtype="contribution",
+                    # Positive: cash enters the account, matching the ledger's
+                    # sign convention rather than the trade's.
+                    amount_cents=needed_cents,
+                    quantity=None,
+                    price_cents=None,
+                    date=on,
+                    description="Monthly contribution",
+                )
+            )
+            result.investment_transactions += 1
 
         if spec.annual_fee_dollars:
             for index, on in enumerate(dates):
