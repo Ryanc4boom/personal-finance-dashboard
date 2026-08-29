@@ -138,11 +138,20 @@ change that would otherwise show NVIDIA's 10-for-1 as 880% dilution.
 │       │                     # investment, net_worth, goals, sec_client, xbrl,
 │       │                     # filings, market_data, research
 │       └── seeds/            # deterministic synthetic fixtures for every phase
-└── frontend/                 # Next.js App Router + Tailwind + hand-rolled SVG charts
-    └── app/
-        ├── budgets/ subscriptions/ forecast/ investments/
-        ├── net-worth/ goals/ research/[ticker]/
-        └── page.tsx           # ledger
+├── frontend/                 # Next.js App Router + Tailwind + hand-rolled SVG charts
+│   └── app/
+│       ├── budgets/ subscriptions/ forecast/ investments/
+│       ├── net-worth/ goals/ research/[ticker]/
+│       └── page.tsx          # ledger
+├── analytics/                # ELT layer — additive, writes only to analytics_* schemas
+│   ├── dbt/
+│   │   ├── models/           # staging/ → intermediate/ → marts/
+│   │   ├── tests/            # 11 singular tests encoding business rules
+│   │   └── macros/
+│   ├── dagster_budgeting/    # assets_ingest · assets_research · assets_dbt · definitions
+│   ├── ddl/landing.sql       # SEC snapshot landing tables
+│   └── tests/                # analytics-only pytest (separate rootdir from backend/)
+└── Makefile                  # make demo · dagster · dbt-docs · demo-reset
 ```
 
 **Backend:** FastAPI (sync endpoints on the threadpool — the work is blocking
@@ -252,6 +261,189 @@ guessing).
 | GET | `/api/v1/research/{ticker}` | Four-stage SEC-sourced scorecard |
 
 Full interactive docs: `/docs` (FastAPI/OpenAPI).
+
+---
+
+## Analytics: a tested star schema on dbt + Dagster
+
+Everything above is OLTP — every read is a point query scoped to one user. That
+shape has no answer for *analytical* questions: spend by category by month,
+holdings drift over time, fundamentals history for a ticker. The `analytics/`
+directory adds a dimensional model, a version-controlled transformation layer,
+and an orchestrator that runs it on a schedule and fails loudly when the data is
+wrong.
+
+It is **purely additive**. No existing model, service, router, migration or test
+was modified, and every new object lands in a new schema — never `public`.
+
+### One command
+
+```bash
+make demo          # createdb → migrate → seed → ingest → research → build + test
+make dagster       # asset graph and lineage      → localhost:3030
+make dbt-docs      # dbt's own lineage graph      → localhost:8085
+make demo-reset    # drop the demo database and do it all again
+```
+
+`make demo` targets **`budgeting_demo`**, a separate database of synthetic
+fixtures. That matters more than it looks: the marts, `dbt docs` and the Dagster
+UI all faithfully render whatever they point at, and pointed at the development
+database every one of them is a picture of somebody's real finances.
+
+### The model
+
+Three fact grains, which is what makes it a star schema rather than a pile of
+tables:
+
+| Fact | Grain |
+| --- | --- |
+| `fact_transactions` | one row per transaction — a classic transaction fact |
+| `fact_holdings` | account × security × date — a **periodic snapshot**, semi-additive |
+| `fact_company_fundamentals` | company × fiscal year |
+| `fact_investment_transactions` | one row per investment transaction |
+| `fact_research_checks` | company × snapshot date × stage × check |
+
+Conformed dimensions: `dim_time`, `dim_accounts`, `dim_categories`,
+`dim_merchants`, `dim_users`, `dim_securities`, `dim_companies`, plus
+`bridge_transaction_tags` for the `text[]` that cannot enter a surrogate key.
+
+**`dim_securities.ticker_symbol` ↔ `dim_companies.ticker` is the conformed
+dimension**, and it joins two source systems that agree on nothing else — Plaid
+issues its own security id per item, the SEC issues CIKs, neither has heard of
+the other. Ticker is the only value both emit for the same company.
+
+Some decisions worth defending:
+
+- **No incremental models anywhere.** `services/ingestion.remove_transaction`
+  does `db.delete(txn)` — removals are *hard deletes*, with no `is_removed` and
+  no `deleted_at`. An incremental `fact_transactions` would retain rows that no
+  longer exist and drift further from reality every run. At ~10³ rows a full
+  rebuild is free, so incremental would buy nothing and cost correctness.
+- **Every user-scoped fact carries `user_id`** with `not_null` and a
+  `relationships` test. With one seeded user a missing ownership filter returns
+  the right answer anyway, so a mart without `user_id` would bake that trap
+  into the warehouse.
+- **The research marts deliberately have no `user_id`** — public filings belong
+  to nobody. The join to a person runs through ticker.
+- **Staging is `table`, not `view`.** A view in another schema takes a catalog
+  dependency on `public`, which would break the bare `drop_all()` in
+  `tests/test_object_ownership.py` with an error pointing nowhere near the cause.
+- **The SEC research module persists nothing** — it returns a transient report —
+  so a Dagster asset lands dated snapshots. That is what turns a request-scoped
+  verdict into history: which check flipped PASS→FAIL, and when.
+
+### Why Dagster, not Airflow
+
+Chosen on fit, and the tradeoff is written down rather than hidden.
+
+- `dagster-dbt` makes every dbt model a **first-class asset**, so the DAG *is*
+  the lineage graph — `plaid_sync → staging → intermediate → marts`, 34 assets.
+  An Airflow DAG would show one opaque `dbt build` task and the lineage would
+  live only in dbt docs.
+- Every dbt test becomes an **asset check** attached to the model it tests —
+  245 of them — instead of pass/fail buried in a run log.
+- Asset semantics ("this table should exist and be fresh") match idempotent
+  full-refresh better than task semantics ("run this, then that").
+- One container beside the existing `db`/`redis`, versus Airflow's webserver +
+  scheduler + metadata database for a single daily job.
+- **Honest counterpoint:** Airflow has far more market share and a far larger
+  hiring pool. For a one-job pipeline whose value is lineage and data quality,
+  Dagster fits better; for a large heterogeneous scheduling estate it would not
+  obviously win.
+
+### Why `dbt build`, never `dbt run` then `dbt test`
+
+The single most important decision in the orchestration. `build` interleaves per
+node: it materialises a model, immediately runs that model's tests, and **skips
+every dependent if a test fails**. `run` followed by `test` would materialise
+the entire mart layer on top of known-bad data and only complain afterwards — by
+which point the marts are wrong, published, and green.
+
+Verified rather than assumed: breaking a staging model produced
+`PASS=235 ERROR=1 SKIP=34` with `fact_transactions` explicitly **skipped**.
+
+### Data quality: dbt tests, and why not Great Expectations
+
+**322 data tests across 28 models** run on every build — `not_null`, `unique`,
+`relationships`, `accepted_values`, `accepted_range`,
+`unique_combination_of_columns`, plus eleven singular tests encoding real
+business rules. (`dbt build` reports `PASS=350`, counting the models it
+materialises alongside the tests.) `store_failures: true`, so failing rows land
+in `analytics_test_failures` and are inspectable rather than just a count.
+
+Great Expectations was evaluated and **declined**:
+
+- Its real differentiators are distributional expectations, automated profiling,
+  and unifying quality checks across *heterogeneous* sources. This is one
+  Postgres database, ~10³ rows, one transformation tool.
+- Everything needed here dbt does natively **inside the same DAG**, with
+  `build`'s skip-downstream semantics. GE runs *outside* that DAG, so a GE
+  failure would not stop a downstream model from building — which directly
+  undercuts the requirement it would supposedly serve.
+- It is a second metadata store, a second config language, and a second place
+  for a failure to hide. More quality tooling is not more quality.
+- If distributional checks are ever wanted, `dbt_expectations` provides
+  GE-style expectations *as dbt tests* with no extra infrastructure. That is the
+  upgrade path — not GE itself.
+
+### The tests that actually matter
+
+Every test here is of the form "return the rows that violate me". On an **empty
+table every one of them passes**, so a build against an unseeded database
+produces empty marts and a perfectly green suite — the pipeline reporting
+healthy at the exact moment it has no data. Two tests exist solely to close
+that hole: `assert_facts_not_empty` and `assert_research_conforms_to_portfolio`.
+
+Others worth naming:
+
+- **`assert_transfer_pairs_net_to_zero`** — the two legs of an internal transfer
+  must sum to zero, and a pair must not span two users. No database constraint
+  enforces this; a broken pair silently double-counts money movement as spend.
+- **`assert_transaction_count_reconciles`** — `raw_transaction` added − removed
+  against the live `transaction` count. The only test that can detect a hard
+  delete.
+- **`assert_research_stage_status_is_worst_check`** — re-derives the framework's
+  rollup rule (worst verdict wins; an UNKNOWN cannot be papered over by a PASS)
+  and compares it against what the service actually said.
+- **`assert_fundamentals_reconcile`** — free cash flow must equal operating cash
+  flow minus capex. Filers tag capex with either sign, so this is a live risk;
+  an injected sign flip surfaced as a $25bn discrepancy.
+
+**Every guard above was confirmed to fire before being trusted.** Each was
+broken on purpose and the build watched go red. That habit is load-bearing in
+this repo: the `.githooks` private-key rule silently never fired for its entire
+life, and a check that accepts everything passes any happy-path test.
+
+The sharpest demonstration: lower-casing the ticker in one staging model left
+**349 of 350 nodes green** and only the conformance test red. Nothing else in
+the suite can see a join that silently matches nothing.
+
+### Security notes specific to this layer
+
+- **`.gitignore` carries `*.sql`** — a `pg_dump` of this database holds live
+  Plaid tokens and every real transaction, a worse leak than `.env`. Every dbt
+  model therefore needs an explicit negation to be committable at all.
+  `make verify-gitignore` asserts **both** directions: models are tracked *and*
+  a stray dump still is not.
+- **A dedicated `budgeting_analytics` role** with `SELECT` on `public` and no
+  `INSERT`/`UPDATE`/`DELETE`, so "marts must never be written into `public`" is
+  a database guarantee rather than a convention. `access_token` is revoked
+  column-by-column — a table-level `GRANT` implicitly covers every column and
+  Postgres will not let a column-level `REVOKE` subtract from it, so the first
+  version of that script looked right and granted the token anyway.
+- **`dbt target/`, `logs/` and `dbt_packages/` are ignored.** `manifest.json`
+  embeds compiled SQL, `catalog.json` carries row counts and column stats, and
+  `logs/dbt.log` at debug level carries real merchant names and amounts.
+- **Telemetry off on both tools** (`send_anonymous_usage_stats: false`,
+  `telemetry.enabled: false`). Both phone home by default.
+- **Dagster instance storage is SQLite on a named volume**, not
+  `dagster-postgres`, which would write ~12 tables *and its own
+  `alembic_version`* into `public` — where the app's `include_schemas=False`
+  autogenerate would then propose dropping all of them.
+- **No amounts in materialisation metadata.** Row counts only, and deliberately
+  not `fetch_column_metadata()`: the min and max of `signed_amount_cents` are
+  the user's largest transactions, and the Dagster event log has none of the
+  protections the database has.
 
 ---
 
