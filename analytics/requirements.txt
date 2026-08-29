@@ -12,3 +12,9 @@ dbt-postgres>=1.9,<1.10
 dagster>=1.9,<1.12
 dagster-dbt>=0.25,<0.28
 dagster-webserver>=1.9,<1.12
+
+# For analytics/tests only. Separate from backend/requirements.txt so the API
+# image does not grow a test dependency, and separate from the backend's own
+# pytest run so `cd backend && pytest` keeps its existing scope — rootdir is
+# backend/, which never sees analytics/.
+pytest>=8,<9

@@ -20,17 +20,45 @@ from dagster_dbt import (
 from .project import dbt_project
 
 
+# Source tables that `plaid_sync` actually writes. Mapping these to the
+# ingestion asset's key is what connects the two halves of the pipeline: dbt
+# knows these tables exist but has no idea anything upstream produces them, and
+# without this the graph would show ingestion and transformation as two
+# unrelated islands that merely happen to run in the same job.
+#
+# Listed explicitly rather than "every source", because it is not every source.
+# `category`, `merchant`, `budget`, `rule` and the rest are user- or
+# seed-maintained; claiming ingestion produces them would draw an edge that
+# does not exist and would make a stale category look like a sync problem.
+PLAID_WRITTEN_SOURCES = frozenset(
+    {
+        "item",
+        "account",
+        "transaction",
+        "raw_transaction",
+        "balance_snapshot",
+        "security",
+        "holding",
+        "investment_transaction",
+    }
+)
+
+
 class BudgetingDbtTranslator(DagsterDbtTranslator):
     """Names the assets. Only source keys are customised; models keep theirs."""
 
     def get_asset_key(self, dbt_resource_props: Mapping[str, Any]) -> AssetKey:
-        # dbt's default key for a source is the bare table name, which would put
-        # `transaction` and `account` — OLTP tables this layer only reads — in
-        # the same flat namespace as the marts it builds. Prefixing them makes
-        # the graph legible at a glance: everything under `oltp/` is somebody
-        # else's data that we do not own or write.
         if dbt_resource_props["resource_type"] == "source":
-            return AssetKey(["oltp", dbt_resource_props["name"]])
+            name = dbt_resource_props["name"]
+            if name in PLAID_WRITTEN_SOURCES:
+                return AssetKey("plaid_sync")
+
+            # dbt's default key for a source is the bare table name, which would
+            # put `category` and `budget` — OLTP tables this layer only reads —
+            # in the same flat namespace as the marts it builds. Prefixing them
+            # makes the graph legible at a glance: everything under `oltp/` is
+            # somebody else's data that we do not own or write.
+            return AssetKey(["oltp", name])
 
         return super().get_asset_key(dbt_resource_props)
 
@@ -57,6 +85,12 @@ dagster_dbt_translator = BudgetingDbtTranslator(
         # spans two dimensions. They still RUN, and they still fail the build;
         # they just do not show up as a check next to a model in the UI.
         enable_asset_checks=True,
+        # Eight dbt sources collapse onto the single `plaid_sync` key above.
+        # Without this flag that is an error, because the usual reason two
+        # sources share a key is a typo. Here it is the intent: one asset
+        # writes all eight tables in one pass, and modelling it as eight
+        # separate producers would claim a granularity the sync does not have.
+        enable_duplicate_source_asset_keys=True,
     )
 )
 

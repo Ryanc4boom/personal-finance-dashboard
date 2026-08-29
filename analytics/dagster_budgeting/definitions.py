@@ -4,13 +4,16 @@ from dagster import (
     AssetSelection,
     DefaultScheduleStatus,
     Definitions,
+    EnvVar,
     ScheduleDefinition,
     define_asset_job,
 )
 from dagster_dbt import DbtCliResource
 
 from .assets_dbt import dbt_analytics_assets
+from .assets_ingest import plaid_sync
 from .project import DBT_TARGET, dbt_project
+from .resources import OltpDatabase
 
 # Everything, in dependency order. A single job rather than one per layer:
 # the layers are not independently useful — a rebuilt staging table nobody
@@ -39,7 +42,7 @@ daily_refresh_schedule = ScheduleDefinition(
 )
 
 defs = Definitions(
-    assets=[dbt_analytics_assets],
+    assets=[plaid_sync, dbt_analytics_assets],
     jobs=[analytics_refresh_job],
     schedules=[daily_refresh_schedule],
     resources={
@@ -48,5 +51,11 @@ defs = Definitions(
         # DBT_TARGET says otherwise; see profiles.yml for why `real` is the
         # one that has to be asked for explicitly.
         "dbt": DbtCliResource(project_dir=dbt_project, target=DBT_TARGET),
+        # EnvVar, not os.environ. EnvVar resolves when a run starts; os.environ
+        # would resolve while the code location loads, so an unset
+        # DATABASE_URL would blank the entire UI — every dbt asset included —
+        # instead of failing the one asset that needs it, with a message that
+        # says which variable is missing.
+        "oltp": OltpDatabase(url=EnvVar("DATABASE_URL")),
     },
 )
