@@ -1,5 +1,14 @@
 version: 2
 
+# Mart tests catch a bad TRANSFORMATION; the near-identical tests in
+# _staging.yml catch a bad ASSUMPTION about the source. They fail for different
+# reasons and both are worth having.
+#
+# Every fact carries user_id with not_null AND a relationships test to
+# dim_users. CLAUDE.md's rule 2 notes that with one seeded user a missing
+# ownership filter returns the right answer anyway and is invisible until it is
+# a breach — a mart without user_id would bake that trap into the warehouse.
+
 models:
   - name: dim_time
     description: >
@@ -41,4 +50,424 @@ models:
       - name: is_weekend
         data_tests: [not_null]
       - name: is_month_end
+        data_tests: [not_null]
+
+  # ---------------------------------------------------------------- users --- #
+  - name: dim_users
+    description: >
+      One row per person. Carries no email address — see the model for why a
+      mart is the wrong layer to put directly identifying data in.
+    columns:
+      - name: user_id
+        data_tests: [not_null, unique]
+      - name: user_label
+        data_tests: [not_null, unique]
+      - name: user_currency
+        data_tests: [not_null]
+
+  # ------------------------------------------------------------- accounts --- #
+  - name: dim_accounts
+    description: One row per account, flattened with its item and institution.
+    columns:
+      - name: account_id
+        data_tests: [not_null, unique]
+      - name: user_id
+        data_tests:
+          - not_null
+          - relationships: {to: ref('dim_users'), field: user_id}
+      - name: account_type
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: [depository, credit, loan, investment, other]
+      - name: institution_name
+        description: Coalesced to 'Unknown Institution' rather than left NULL.
+        data_tests: [not_null]
+      - name: net_worth_sign
+        description: >
+          -1 for liabilities, +1 otherwise. Derived from account_type, not from
+          the sign of the stored balance, which is not a reliable input.
+        data_tests:
+          - not_null
+          - accepted_values: {values: [-1, 1], quote: false}
+      - name: is_liability_account
+        data_tests: [not_null]
+
+  # ----------------------------------------------------------- categories --- #
+  - name: dim_categories
+    description: >
+      One row per category with the hierarchy flattened, plus one unknown
+      member so facts have no NULL category keys.
+    # The "unknown member must exist" assertion lives in
+    # tests/assert_unknown_members_exist.sql. It cannot be an
+    # expression_is_true: that macro returns the rows which FAIL the
+    # expression, so asserting a row exists means asserting a count is
+    # non-zero, which is the opposite shape. The first attempt used
+    # `expression: true` with `error_if: "=0"` and failed unconditionally.
+    columns:
+      - name: category_id
+        data_tests: [not_null, unique]
+      - name: category_slug
+        data_tests: [not_null, unique]
+      - name: category_kind
+        description: >
+          The mart list differs from CategoryKind in app/models/enums.py by
+          'UNKNOWN', which is the sentinel member. That is deliberate — the
+          sentinel must not masquerade as a real EXPENSE and get swept into a
+          budget total.
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: [INCOME, EXPENSE, TRANSFER, UNKNOWN]
+      - name: rollup_slug
+        description: Top-level ancestor's slug; own slug when already top level.
+        data_tests: [not_null]
+      - name: rollup_name
+        data_tests: [not_null]
+      - name: is_unknown_member
+        data_tests: [not_null]
+      - name: user_id
+        data_tests:
+          - dbt_utils.relationships_where:
+              to: ref('dim_users')
+              field: user_id
+              from_condition: user_id is not null
+
+  # ------------------------------------------------------------ merchants --- #
+  - name: dim_merchants
+    description: >
+      One row per CANONICAL merchant. Aliases are collapsed and counted, not
+      given rows of their own.
+    columns:
+      - name: merchant_id
+        data_tests: [not_null, unique]
+      - name: merchant_display_name
+        data_tests: [not_null]
+      - name: merchant_normalized_key
+        data_tests: [not_null]
+      - name: alias_count
+        description: >
+          Number of alias rows collapsed into this merchant. Carried so the
+          collapsing is auditable: a merchant that suddenly has hundreds of
+          aliases means normalisation has gone wrong.
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range: {min_value: 0, inclusive: true}
+      - name: is_unknown_member
+        data_tests: [not_null]
+
+  # --------------------------------------------------------- transactions --- #
+  - name: fact_transactions
+    description: >
+      One row per transaction. Nothing is filtered out — the flags are the
+      product, not the filtering.
+    data_tests:
+      # Re-asserts ck_transaction_direction_sign at the mart layer. NOT
+      # tautological: the database guarantees this in `public`, and this
+      # catches a sign flip introduced by a dbt model between there and here.
+      # A flip is a live risk precisely because Plaid's convention is the
+      # inverse of this one and is already flipped once at ingestion.
+      - dbt_utils.expression_is_true:
+          expression: >
+            (direction = 'INFLOW'  and signed_amount_cents >= 0) or
+            (direction = 'OUTFLOW' and signed_amount_cents <= 0)
+      - dbt_utils.expression_is_true:
+          expression: "abs_amount_cents = abs(signed_amount_cents)"
+      # A spendable row is never a transfer and never budget-excluded.
+      - dbt_utils.expression_is_true:
+          expression: "not (is_transfer or excluded_from_budget)"
+          config:
+            where: "is_spendable"
+    columns:
+      - name: transaction_id
+        data_tests: [not_null, unique]
+      - name: provider_txn_id
+        data_tests: [not_null, unique]
+      - name: user_id
+        data_tests:
+          - not_null
+          - relationships: {to: ref('dim_users'), field: user_id}
+      - name: account_id
+        data_tests:
+          - not_null
+          - relationships: {to: ref('dim_accounts'), field: account_id}
+      - name: category_id
+        description: Never NULL — coalesced onto the unknown member.
+        data_tests:
+          - not_null
+          - relationships: {to: ref('dim_categories'), field: category_id}
+      - name: merchant_id
+        description: >
+          Never NULL, and always the CANONICAL merchant. The relationships test
+          is what proves the canonicalisation resolved — an alias id would not
+          be found in dim_merchants.
+        data_tests:
+          - not_null
+          - relationships: {to: ref('dim_merchants'), field: merchant_id}
+      - name: date_key
+        data_tests:
+          - not_null
+          - relationships: {to: ref('dim_time'), field: date_key}
+      - name: transaction_date
+        data_tests: [not_null]
+      - name: signed_amount_cents
+        data_tests: [not_null]
+      - name: abs_amount_cents
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range: {min_value: 0, inclusive: true}
+      - name: direction
+        data_tests:
+          - not_null
+          - accepted_values: {values: [INFLOW, OUTFLOW]}
+      - name: category_source
+        data_tests:
+          - accepted_values:
+              values: [USER, RULE, MERCHANT, PROVIDER, UNCATEGORIZED]
+      - name: is_spendable
+        data_tests: [not_null]
+      - name: is_pending
+        data_tests: [not_null]
+      - name: is_transfer
+        data_tests: [not_null]
+      - name: excluded_from_budget
+        data_tests: [not_null]
+      - name: transfer_pair_id
+        data_tests:
+          - dbt_utils.relationships_where:
+              to: ref('fact_transactions')
+              field: transaction_id
+              from_condition: transfer_pair_id is not null
+
+  # ----------------------------------------------------------- securities --- #
+  - name: dim_securities
+    description: >
+      One row per security. ticker_symbol is the conformed key between Plaid's
+      investment feed and the SEC research marts — the only attribute the two
+      source systems share.
+    columns:
+      - name: security_id
+        data_tests: [not_null, unique]
+      - name: provider_security_id
+        data_tests: [not_null, unique]
+      - name: ticker_symbol
+        description: >
+          Nullable — a money-market sweep has no ticker. Uniqueness is asserted
+          only where it is not null: two securities legitimately share a NULL
+          ticker, and a plain `unique` test would fail on the second one.
+        data_tests:
+          - unique:
+              config:
+                where: "ticker_symbol is not null"
+      - name: security_type
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: [EQUITY, ETF, MUTUAL_FUND, CRYPTO, FIXED_INCOME, CASH_EQUIVALENT]
+      - name: asset_class
+        description: >
+          A second, independent axis. Not derivable from security_type: an ETF
+          may hold equity, bonds or REITs, and deriving exposure from the
+          instrument type reports a diversified portfolio as 100% ETF.
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: [US_EQUITY, INTERNATIONAL_EQUITY, FIXED_INCOME, CRYPTO, REAL_ESTATE, CASH]
+      - name: is_researchable
+        description: >
+          Whether this security can join to the SEC marts at all. NULL-free
+          flag so an empty fundamentals join reads as "no filer behind an ETF"
+          rather than as missing data.
+        data_tests: [not_null]
+
+  # ------------------------------------------------------------- holdings --- #
+  - name: fact_holdings
+    description: >
+      PERIODIC SNAPSHOT at (account, security, as_of_date). Measures are
+      SEMI-ADDITIVE — they sum within a date, never across dates. Summing
+      market_value_cents over a year of snapshots reports a portfolio ~365x too
+      large, and does so without erroring.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [account_id, security_id, as_of_date]
+      # A short position is legal, so market value may be negative and no range
+      # test belongs on it. Quantity and value must at least agree in sign:
+      # holding a positive number of shares of something worth negative money
+      # is not a market condition, it is a join that duplicated rows.
+      - dbt_utils.expression_is_true:
+          expression: "sign(quantity) = sign(market_value_cents)"
+          config:
+            where: "quantity <> 0 and market_value_cents <> 0"
+    columns:
+      - name: holding_key
+        description: >
+          Surrogate over the real grain. Exists because holding_id is NOT
+          unique — the source hypertable is keyed (id, as_of_date).
+        data_tests: [not_null, unique]
+      - name: holding_id
+        description: Deliberately has no unique test. See holding_key.
+        data_tests: [not_null]
+      - name: user_id
+        data_tests:
+          - not_null
+          - relationships: {to: ref('dim_users'), field: user_id}
+      - name: account_id
+        data_tests:
+          - not_null
+          - relationships: {to: ref('dim_accounts'), field: account_id}
+      - name: security_id
+        data_tests:
+          - not_null
+          - relationships: {to: ref('dim_securities'), field: security_id}
+      - name: date_key
+        data_tests:
+          - not_null
+          - relationships: {to: ref('dim_time'), field: date_key}
+      - name: as_of_date
+        data_tests: [not_null]
+      - name: quantity
+        data_tests: [not_null]
+      - name: market_value_cents
+        description: >
+          The institution's own valuation, authoritative even where it
+          disagrees with quantity x price. It is the number on the user's
+          statement.
+        data_tests: [not_null]
+      - name: cost_basis_cents
+        description: >
+          Nullable on purpose. An ACATS transfer routinely loses basis, and
+          coalescing to 0 reports the whole position as gain.
+        data_tests:
+          - dbt_utils.accepted_range: {min_value: 0, inclusive: true}
+      - name: value_drift_cents
+        description: >
+          Reported value minus quantity x price. Non-zero is expected;
+          tests/assert_holding_value_reconciles.sql checks the stored number
+          still matches its own inputs.
+        data_tests: [not_null]
+      - name: is_latest_snapshot
+        description: >
+          Flagged per ACCOUNT, not against a global max date — one institution
+          syncing a day late must not drop an entire brokerage out of current
+          holdings.
+        data_tests: [not_null]
+      - name: is_short_position
+        data_tests: [not_null]
+
+  # -------------------------------------------- investment transactions --- #
+  - name: fact_investment_transactions
+    description: >
+      One row per trade, distribution, fee or transfer. Separate from
+      fact_transactions on purpose: a BUY rearranges value inside an account
+      without changing its total, so merging the two would report every 401(k)
+      contribution as spend.
+    data_tests:
+      # Direction is derived from the sign, so this pins the derivation rather
+      # than restating a database CHECK. An inbound and an outbound TRANSFER
+      # share one `type` value — the sign is the only thing distinguishing them.
+      - dbt_utils.expression_is_true:
+          expression: >
+            (direction = 'INFLOW'  and amount_cents >= 0) or
+            (direction = 'OUTFLOW' and amount_cents <  0)
+      # Contributions come only from external flows. Without this, an internal
+      # BUY leaking into net_contribution_cents would report a rebalance as new
+      # money and erase it from measured return.
+      - dbt_utils.expression_is_true:
+          expression: "net_contribution_cents = 0"
+          config:
+            where: "not is_external_flow"
+      - dbt_utils.expression_is_true:
+          expression: "net_contribution_cents = amount_cents"
+          config:
+            where: "is_external_flow"
+    columns:
+      - name: investment_transaction_id
+        data_tests: [not_null, unique]
+      - name: provider_investment_txn_id
+        data_tests: [not_null, unique]
+      - name: user_id
+        data_tests:
+          - not_null
+          - relationships: {to: ref('dim_users'), field: user_id}
+      - name: account_id
+        data_tests:
+          - not_null
+          - relationships: {to: ref('dim_accounts'), field: account_id}
+      - name: security_id
+        description: >
+          Nullable, and the one key in this project not coalesced onto an
+          unknown member: a fee or wire genuinely has no instrument, which is
+          different from one that failed to resolve. See the model for why a
+          sentinel would be dishonest here.
+        data_tests:
+          - dbt_utils.relationships_where:
+              to: ref('dim_securities')
+              field: security_id
+              from_condition: security_id is not null
+      - name: has_security
+        data_tests: [not_null]
+      - name: date_key
+        data_tests:
+          - not_null
+          - relationships: {to: ref('dim_time'), field: date_key}
+      - name: transaction_date
+        data_tests: [not_null]
+      - name: amount_cents
+        description: Signed the LEDGER's way — positive is cash into the account.
+        data_tests: [not_null]
+      - name: net_contribution_cents
+        description: >
+          amount_cents on an external flow, 0 otherwise. Derived once here so
+          no consumer re-derives it and reports contributions as gains.
+        data_tests: [not_null]
+      - name: investment_transaction_type
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: [BUY, SELL, DIVIDEND, INTEREST, FEE, TRANSFER]
+      - name: is_external_flow
+        data_tests: [not_null]
+      - name: direction
+        data_tests:
+          - not_null
+          - accepted_values: {values: [INFLOW, OUTFLOW]}
+
+  # -------------------------------------------------------- tags bridge --- #
+  - name: bridge_transaction_tags
+    description: >
+      One row per (transaction, tag). Empty in the demo database because the
+      seeds do not tag anything — so the tests here are currently vacuous, and
+      that is stated rather than hidden.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [transaction_id, tag_position]
+    columns:
+      - name: transaction_id
+        data_tests:
+          - not_null
+          - relationships: {to: ref('fact_transactions'), field: transaction_id}
+      - name: user_id
+        data_tests:
+          - not_null
+          - relationships: {to: ref('dim_users'), field: user_id}
+      - name: tag
+        data_tests: [not_null]
+      - name: tag_normalized
+        data_tests: [not_null]
+      - name: tag_position
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range: {min_value: 1, inclusive: true}
+
+  # --------------------------------------------------------- intermediate --- #
+  - name: int_account_ownership
+    description: >
+      Resolves user → item → account once, so no downstream model re-walks the
+      chain and gets it wrong.
+    columns:
+      - name: account_id
+        data_tests: [not_null, unique]
+      - name: user_id
+        data_tests: [not_null]
+      - name: item_id
         data_tests: [not_null]
