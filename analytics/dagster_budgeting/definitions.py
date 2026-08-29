@@ -7,11 +7,13 @@ from dagster import (
     EnvVar,
     ScheduleDefinition,
     define_asset_job,
+    in_process_executor,
 )
 from dagster_dbt import DbtCliResource
 
 from .assets_dbt import dbt_analytics_assets
 from .assets_ingest import plaid_sync
+from .assets_research import research_snapshot
 from .project import DBT_TARGET, dbt_project
 from .resources import OltpDatabase
 
@@ -23,6 +25,25 @@ analytics_refresh_job = define_asset_job(
     name="analytics_refresh",
     selection=AssetSelection.all(),
     description="Rebuild and test the warehouse end to end. Safe to re-run.",
+    # in_process, not the default multiprocess.
+    #
+    # `research_snapshot` calls into app.services.sec_client, whose rate limiter
+    # is a module-level object throttling to SEC_RATE_LIMIT_PER_SECOND — PER
+    # PROCESS. Under the multiprocess executor each step gets its own
+    # interpreter and its own limiter, so two steps touching EDGAR would each
+    # believe they owned the whole budget and the real request rate would be
+    # double what the setting says. SEC enforces by IP ban, and an IP ban is not
+    # a failure you notice quickly or recover from on your own schedule.
+    #
+    # The asset also declares pool="sec_edgar" with a limit of 1. That is not
+    # redundancy for its own sake: this line is a property of the job and could
+    # be dropped by someone adding parallelism for the dbt half, while the pool
+    # is a property of the asset and travels with it.
+    #
+    # Costs nothing here. There are two root assets and one dbt multi-asset, the
+    # run coordinator already allows one run at a time, and dbt does its own
+    # internal threading inside a subprocess regardless of this setting.
+    executor_def=in_process_executor,
 )
 
 # Daily, and STOPPED by default.
@@ -42,7 +63,7 @@ daily_refresh_schedule = ScheduleDefinition(
 )
 
 defs = Definitions(
-    assets=[plaid_sync, dbt_analytics_assets],
+    assets=[plaid_sync, research_snapshot, dbt_analytics_assets],
     jobs=[analytics_refresh_job],
     schedules=[daily_refresh_schedule],
     resources={

@@ -43,6 +43,20 @@ PLAID_WRITTEN_SOURCES = frozenset(
     }
 )
 
+# The landing tables `research_snapshot` writes. Same idea as above, and the
+# edge matters more here: these three tables have no other producer anywhere.
+# The OLTP app never writes them — app/services/research.py persists nothing at
+# all — so without this mapping an empty research mart would look like a dbt
+# problem, with no arrow pointing at the asset that was actually supposed to
+# fill it.
+RESEARCH_WRITTEN_SOURCES = frozenset(
+    {
+        "research_company",
+        "research_fundamentals",
+        "research_check",
+    }
+)
+
 
 class BudgetingDbtTranslator(DagsterDbtTranslator):
     """Names the assets. Only source keys are customised; models keep theirs."""
@@ -52,6 +66,9 @@ class BudgetingDbtTranslator(DagsterDbtTranslator):
             name = dbt_resource_props["name"]
             if name in PLAID_WRITTEN_SOURCES:
                 return AssetKey("plaid_sync")
+
+            if name in RESEARCH_WRITTEN_SOURCES:
+                return AssetKey("research_snapshot")
 
             # dbt's default key for a source is the bare table name, which would
             # put `category` and `budget` — OLTP tables this layer only reads —

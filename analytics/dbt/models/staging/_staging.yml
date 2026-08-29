@@ -326,3 +326,126 @@ models:
         data_tests: [not_null]
       - name: is_external_flow
         data_tests: [not_null]
+
+  # ------------------------------------------------------------------------ #
+  # SEC research staging. No user_id on any of these — public filings, the same
+  # for every user. See analytics/ddl/landing.sql for why that exception exists.
+  # ------------------------------------------------------------------------ #
+
+  - name: stg_research_companies
+    description: One row per researched company, keyed on the conformed ticker.
+    columns:
+      - name: ticker
+        description: >
+          Upper-cased and trimmed, identically to stg_securities.ticker_symbol.
+          The two must normalise the same way or the conformed join silently
+          returns nothing — see tests/assert_research_conforms_to_portfolio.sql.
+        data_tests: [not_null, unique]
+      - name: cik
+        description: The SEC's own identity for the filer. Stable across a ticker change.
+        data_tests: [not_null]
+      - name: company_name
+        data_tests: [not_null]
+      - name: last_snapshot_date
+        data_tests: [not_null]
+      - name: first_snapshot_date
+        data_tests: [not_null]
+      - name: snapshot_count
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 1
+              inclusive: true
+      - name: days_since_snapshot
+        description: >
+          Cannot be negative. A negative value means a snapshot is dated in the
+          future, which is a clock problem rather than a data problem and is
+          worth catching where it happens instead of downstream.
+        data_tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              inclusive: true
+
+  - name: stg_research_fundamentals
+    description: One row per company per fiscal year.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [ticker, fiscal_period_end]
+    columns:
+      - name: ticker
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('stg_research_companies')
+              field: ticker
+      - name: fiscal_period_end
+        data_tests: [not_null]
+      - name: fiscal_label
+        data_tests: [not_null]
+      - name: snapshot_date
+        data_tests: [not_null]
+      - name: revenue_cents
+        description: >
+          Nullable and NOT range-checked below zero. Revenue cannot be
+          negative in principle, but a filer's contra-revenue restatement can
+          tag one, and this layer's job is to report what was filed rather than
+          to argue with it.
+      - name: diluted_shares
+        description: Nullable — a filer that did not tag diluted share count.
+        data_tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              inclusive: false
+              where: "diluted_shares is not null"
+      - name: has_negative_equity
+        data_tests: [not_null]
+
+  - name: stg_research_checks
+    description: One row per company per snapshot per check.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [ticker, snapshot_date, stage_key, check_key]
+    columns:
+      - name: ticker
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('stg_research_companies')
+              field: ticker
+      - name: snapshot_date
+        data_tests: [not_null]
+      - name: stage_key
+        data_tests: [not_null]
+      - name: check_key
+        data_tests: [not_null]
+      - name: stage_number
+        description: The framework has exactly four stages.
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: [1, 2, 3, 4]
+              quote: false
+      - name: status
+        description: >
+          UNKNOWN is a real verdict, not a null. It means the filing did not
+          carry the concept the check needed, which is a different statement
+          from FAIL and must not be collapsed into it.
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: [PASS, WARN, FAIL, UNKNOWN]
+      - name: stage_status
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: [PASS, WARN, FAIL, UNKNOWN]
+      - name: is_adverse
+        data_tests: [not_null]
+      - name: passed_flag
+        description: >
+          Null for UNKNOWN on purpose, so avg() computes a pass rate over the
+          checks that could actually be answered. Hence no not_null test.
+        data_tests:
+          - accepted_values:
+              values: [0, 1]
+              quote: false

@@ -13,9 +13,15 @@ telemetry:
   enabled: false
 
 run_coordinator:
+  # Queued rather than the default immediate coordinator. The run limit itself
+  # lives under `concurrency` below — Dagster rejects the instance config
+  # outright if max_concurrent_runs is set in both places, which is how this
+  # ended up split across two keys.
   module: dagster.core.run_coordinator
   class: QueuedRunCoordinator
-  config:
+
+concurrency:
+  runs:
     # One run at a time, and this is a correctness setting rather than a
     # resource one. dbt has no cross-process locking: two concurrent `dbt build`
     # invocations race on the create-temp / drop-old / rename cycle each table
@@ -23,6 +29,17 @@ run_coordinator:
     # half-swapped relation behind. The schedule plus a manual "materialise all"
     # click is enough to produce exactly that overlap.
     max_concurrent_runs: 1
+
+  pools:
+    # The `sec_edgar` pool declared by the research_snapshot asset is only a
+    # name until something gives it a limit — an unconfigured pool is
+    # unlimited, which would make the `pool=` argument a guard that reads as
+    # protection and enforces nothing.
+    #
+    # Set as the default rather than per-pool because it is the right default
+    # here: every asset in this project either talks to a rate-limited third
+    # party or drives dbt, and neither benefits from a second copy of itself.
+    default_limit: 1
 
 run_monitoring:
   # Detects runs whose process died without reporting anything and marks them

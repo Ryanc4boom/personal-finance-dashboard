@@ -471,3 +471,174 @@ models:
         data_tests: [not_null]
       - name: item_id
         data_tests: [not_null]
+
+  # ------------------------------------------------------------------------ #
+  # Research marts.
+  #
+  # The one part of the warehouse with no user_id, because it holds public
+  # filings rather than anybody's money. The join to a person runs
+  # dim_companies.ticker -> dim_securities.ticker_symbol -> account -> item ->
+  # user, and the conformance of that first hop is asserted by
+  # tests/assert_research_conforms_to_portfolio.sql rather than assumed.
+  # ------------------------------------------------------------------------ #
+
+  - name: dim_companies
+    description: >
+      One row per researched company. The conformed dimension: `ticker` is the
+      only key the SEC and Plaid both emit for the same entity.
+    columns:
+      - name: ticker
+        data_tests: [not_null, unique]
+      - name: cik
+        data_tests: [not_null]
+      - name: company_name
+        data_tests: [not_null]
+      - name: snapshot_count
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 1
+              inclusive: true
+      - name: fiscal_year_count
+        description: >
+          Zero is legal — a company can be resolved and snapshotted while its
+          annual series fails to parse — so the floor is 0, not 1.
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+              inclusive: true
+      - name: is_held
+        description: >
+          Whether the portfolio actually holds this ticker. Materialised so that
+          dropping unheld companies is a filter someone chose rather than an
+          inner join silently shrinking the result.
+        data_tests: [not_null]
+      - name: held_security_row_count
+        description: >
+          Can exceed 1 legitimately: Plaid issues a security id per item, so the
+          same ticker held at two brokerages is two `security` rows.
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+              inclusive: true
+      - name: latest_fiscal_period_end
+        description: Null when no fiscal year parsed.
+        data_tests:
+          - dbt_utils.expression_is_true:
+              expression: ">= earliest_fiscal_period_end"
+              where: "latest_fiscal_period_end is not null"
+
+  - name: fact_company_fundamentals
+    description: >
+      One row per company per fiscal year. Not additive across companies —
+      different entities, different fiscal calendars. For trending within a
+      company and comparing ratios across them.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [ticker, fiscal_period_end]
+      # Free cash flow must equal operating cash flow minus capex, which the
+      # service stores as an absolute value. Pinned here as well as in
+      # assert_fundamentals_reconcile because this one is attached to the model
+      # as an asset check in the Dagster UI, and the singular test is not —
+      # a test with one parent can be a check, and this has one parent.
+      - dbt_utils.expression_is_true:
+          expression: >
+            abs(free_cash_flow_cents - (operating_cash_flow_cents - capex_cents)) <= 1
+          where: >
+            free_cash_flow_cents is not null
+            and operating_cash_flow_cents is not null
+            and capex_cents is not null
+      # Capex is stored ABSOLUTE. A negative one means the sign convention was
+      # inverted somewhere between the XBRL element and this column, which would
+      # flip free cash flow in the opposite direction and still look plausible.
+      - dbt_utils.expression_is_true:
+          expression: "capex_cents >= 0"
+          where: "capex_cents is not null"
+    columns:
+      - name: company_fundamental_key
+        data_tests: [not_null, unique]
+      - name: ticker
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('dim_companies')
+              field: ticker
+      - name: fiscal_period_end
+        data_tests: [not_null]
+      - name: fiscal_year_end_year
+        data_tests:
+          - not_null
+          # A fiscal year outside this window is a parse error, not a filing.
+          # EDGAR's XBRL financial data does not predate 2009.
+          - dbt_utils.accepted_range:
+              min_value: 2000
+              max_value: 2100
+              inclusive: true
+      - name: gross_margin_bps
+        description: >
+          Can exceed 10000 or go negative in principle, so no range test. A
+          software filer at 99% margin is 9900 bps and entirely real; the
+          reconciliation test checks it against its inputs instead.
+      - name: has_prior_year
+        data_tests: [not_null]
+      - name: revenue_growth_bps
+        description: >
+          Null when the prior year's revenue was absent or non-positive. Growth
+          from a negative base is computable and meaningless — a company halving
+          its losses would report -50% growth while improving.
+      - name: dilution_bps
+        description: >
+          Positive means MORE shares outstanding, so each share owns less.
+          Named for the direction it measures, because "share growth" reads as
+          good news and is not.
+
+  - name: fact_research_checks
+    description: >
+      One row per company per snapshot per check. The history the live,
+      request-scoped research module structurally cannot produce.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [ticker, snapshot_date, stage_key, check_key]
+      # A first observation is not a change. Without this, the day research
+      # first runs would report every check as having just flipped.
+      - dbt_utils.expression_is_true:
+          expression: "status_changed = false"
+          where: "previous_status is null"
+      # deteriorated and improved are opposite directions and cannot both hold.
+      - dbt_utils.expression_is_true:
+          expression: "not (deteriorated and improved)"
+    columns:
+      - name: research_check_key
+        data_tests: [not_null, unique]
+      - name: ticker
+        data_tests:
+          - not_null
+          - relationships:
+              to: ref('dim_companies')
+              field: ticker
+      - name: snapshot_date
+        data_tests: [not_null]
+      - name: status
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: [PASS, WARN, FAIL, UNKNOWN]
+      - name: stage_status
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: [PASS, WARN, FAIL, UNKNOWN]
+      - name: stage_number
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: [1, 2, 3, 4]
+              quote: false
+      - name: status_changed
+        data_tests: [not_null]
+      - name: deteriorated
+        data_tests: [not_null]
+      - name: improved
+        data_tests: [not_null]

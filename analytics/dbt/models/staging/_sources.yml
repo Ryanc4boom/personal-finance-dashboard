@@ -205,3 +205,94 @@ sources:
           - name: description
           - name: currency
           - name: created_at
+
+  # ------------------------------------------------------------------------ #
+  # SEC/XBRL research, landed by the `research_snapshot` Dagster asset.
+  #
+  # A separate source, in a separate schema, because it is a separate system.
+  # Everything under `budgeting` above is written by the FastAPI app and owned
+  # by Alembic; everything here is written by the analytics layer itself, which
+  # is why it is the one source dbt reads that has an upstream asset it can
+  # actually blame when a table is empty.
+  #
+  # No user_id anywhere in here, and that is deliberate rather than an
+  # oversight — see analytics/ddl/landing.sql. These are public filings,
+  # identical for every user; the join to a person happens on ticker against
+  # dim_securities, which is user-scoped.
+  # ------------------------------------------------------------------------ #
+  - name: research
+    description: >
+      Dated snapshots of the four-stage SEC research framework. Written by
+      Dagster, never by the app. Read-only from here.
+    database: "{{ env_var('ANALYTICS_PGDATABASE', 'budgeting_demo') }}"
+    schema: analytics_landing
+
+    tables:
+      - name: research_company
+        description: One row per company ever researched, keyed on ticker.
+        # Staleness here means "nobody has run the research asset lately",
+        # which is a different and much slower-moving thing than a bank sync
+        # falling behind — a 10-K arrives once a year. A week is generous and
+        # still catches an asset that has silently stopped running.
+        loaded_at_field: updated_at
+        freshness:
+          warn_after: {count: 8, period: day}
+          error_after: {count: 30, period: day}
+        columns:
+          - name: ticker
+          - name: cik
+          - name: company_name
+          - name: last_snapshot_date
+          - name: first_snapshot_date
+          - name: snapshot_count
+          - name: updated_at
+
+      - name: research_fundamentals
+        description: >
+          One row per company per fiscal year. Grain excludes snapshot_date on
+          purpose: a fiscal year's figures are a fact about the world, so a
+          re-run overwrites rather than accumulating a duplicate.
+        columns:
+          - name: ticker
+          - name: fiscal_period_end
+          - name: fiscal_label
+          - name: snapshot_date
+          - name: cik
+          - name: revenue_cents
+          - name: gross_profit_cents
+          - name: gross_margin_bps
+          - name: operating_income_cents
+          - name: operating_margin_bps
+          - name: net_income_cents
+          - name: net_margin_bps
+          - name: diluted_shares
+          - name: diluted_eps
+          - name: operating_cash_flow_cents
+          - name: capex_cents
+          - name: free_cash_flow_cents
+          - name: cash_and_sti_cents
+          - name: total_debt_cents
+          - name: long_term_debt_cents
+          - name: equity_cents
+          - name: total_liabilities_cents
+          - name: interest_expense_cents
+          - name: updated_at
+
+      - name: research_check
+        description: >
+          One row per company per snapshot per check. snapshot_date IS in the
+          grain here, which is what makes a PASS to FAIL flip visible over time
+          — the thing the request-scoped research module structurally cannot do.
+        columns:
+          - name: ticker
+          - name: snapshot_date
+          - name: stage_key
+          - name: check_key
+          - name: stage_number
+          - name: stage_title
+          - name: stage_status
+          - name: check_label
+          - name: status
+          - name: value_bps
+          - name: value_cents
+          - name: updated_at
