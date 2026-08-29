@@ -17,8 +17,13 @@ ENV PYTHONUNBUFFERED=1 \
     # Unset, Dagster writes instance state to a temp dir and silently loses
     # every run, schedule tick and materialization between container restarts.
     DAGSTER_HOME=/opt/dagster_home \
-    # Lets `import app.services.ingestion` resolve against the mounted backend.
-    PYTHONPATH=/opt/backend
+    # /opt/backend lets `import app.services.ingestion` resolve against the
+    # mounted backend. /opt/analytics is what makes
+    # `dagster dev -m dagster_budgeting.definitions` importable: the Dagster CLI
+    # does not add the working directory to sys.path, so relying on working_dir
+    # alone fails with ModuleNotFoundError and no hint that the module is
+    # sitting right there.
+    PYTHONPATH=/opt/analytics:/opt/backend
 
 # libpq-dev + build-essential are for psycopg2 (dbt-postgres); postgresql-client
 # gives psql/createdb for the demo-database bootstrap.

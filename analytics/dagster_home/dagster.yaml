@@ -1,0 +1,32 @@
+# Dagster instance config. Mounted at $DAGSTER_HOME inside the container.
+#
+# Storage is left at its default: SQLite under $DAGSTER_HOME, on a named volume.
+# NOT dagster-postgres pointed at the app database — that writes ~12 tables and
+# its own `alembic_version` into `public`, and backend/alembic/env.py leaves
+# include_schemas=False, so autogenerate would propose dropping every one of
+# them and two migration histories would fight over one table name.
+
+telemetry:
+  # Dagster phones home by default. Same rule as dbt's send_anonymous_usage_stats
+  # and the Sentry scrubbing in app/core/telemetry.py: nothing leaves the machine
+  # unless it was asked for.
+  enabled: false
+
+run_coordinator:
+  module: dagster.core.run_coordinator
+  class: QueuedRunCoordinator
+  config:
+    # One run at a time, and this is a correctness setting rather than a
+    # resource one. dbt has no cross-process locking: two concurrent `dbt build`
+    # invocations race on the create-temp / drop-old / rename cycle each table
+    # materialisation performs, and the loser either errors or leaves a
+    # half-swapped relation behind. The schedule plus a manual "materialise all"
+    # click is enough to produce exactly that overlap.
+    max_concurrent_runs: 1
+
+run_monitoring:
+  # Detects runs whose process died without reporting anything and marks them
+  # failed. Without it a container restart mid-build leaves a run STARTED
+  # forever, which reads as "still working" rather than "this never finished" —
+  # the same silent-green failure mode the dbt tests exist to prevent.
+  enabled: true

@@ -144,6 +144,12 @@ services:
       - ./analytics:/opt/analytics
       - ./backend:/opt/backend
       - dagsterhome:/opt/dagster_home
+      # Instance config, bind-mounted ON TOP of the state volume. Dagster reads
+      # $DAGSTER_HOME/dagster.yaml, so the file has to live inside the volume —
+      # but the settings in it (telemetry off, one run at a time) are source,
+      # not state, and baking them into a volume would mean an edit here never
+      # reaching a container that already has one.
+      - ./analytics/dagster_home/dagster.yaml:/opt/dagster_home/dagster.yaml:ro
     working_dir: /opt/analytics
     depends_on:
       db:

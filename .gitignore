@@ -66,7 +66,19 @@ pgdata/
 analytics/dbt/target/
 analytics/dbt/logs/
 analytics/dbt/dbt_packages/
-analytics/dagster_home/
+
+# Dagster's instance directory is run STATE — the SQLite event log holds the
+# stdout of every dbt build, which at debug level is query text over real
+# merchant names and amounts. All of it stays out.
+#
+# One exception, and it needs `dir/*` rather than `dir/`: git does not descend
+# into an excluded directory, so a negation under a `dir/` rule is silently
+# dead and dagster.yaml would look committed while never being tracked. With
+# `dir/*` the directory is still walked and the one config file can be
+# re-admitted by exact name. Everything else, including subdirectories, stays
+# ignored.
+analytics/dagster_home/*
+!analytics/dagster_home/dagster.yaml
 
 # Backups of config. The established convention is `env-<timestamp>.bak`, which
 # holds PLAID_SECRET and ENCRYPTION_KEY in the clear. These live in
