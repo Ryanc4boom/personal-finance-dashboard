@@ -6,8 +6,9 @@ engine, cash-flow forecasting, portfolio and net-worth tracking, and a
 from-scratch equity research tool that scores public companies straight from
 their SEC filings.
 
-It's built in five numbered phases, each with its own migration, service
-layer, and UI. Screenshots below are from the app running against a
+It's built in five numbered phases, each with its own service layer and UI
+(four carry a migration; Phase 5's research module persists nothing, by
+design). Screenshots below are from the app running against a
 deterministic synthetic dataset (`app.seeds.demo` / `app.seeds.investments`) —
 no real account data ever leaves my machine, and the repo ships everything
 needed to generate the same fixtures yourself.
@@ -20,15 +21,19 @@ needed to generate the same fixtures yourself.
 
 It's a real system I use to manage real money, so **correctness beat speed
 everywhere it mattered**: integer-cents storage (never a float touches a
-dollar amount), idempotent Plaid ingestion, raw-payload preservation for
-replay, and a database `CHECK` constraint that ties transaction direction to
-the sign of the amount so a bad write fails loudly instead of quietly
-corrupting a balance.
+dollar of the user's money), idempotent Plaid ingestion, raw-payload
+preservation for replay, and a database `CHECK` constraint that ties
+transaction direction to the sign of the amount so a bad write fails loudly
+instead of quietly corrupting a balance.
 
-Auth is deliberately out of scope — it's a single-user system seeded from
-`DEV_USER_EMAIL` — but the `user → item → account → transaction` ownership
-chain is enforced in every query from day one, so bolting on real auth later
-is a swap of one function, not a schema rework.
+User authentication is deliberately out of scope: there is no login, no
+session, and no way to be a second user at runtime. It's a single-user system
+seeded from `DEV_USER_EMAIL`, and the shared `X-API-Key` in front of it proves
+possession of a secret, not identity. What *does* exist is the
+`user → item → account → transaction` ownership chain, enforced in every
+user-scoped query from day one — the public research endpoints and the
+signature-verified Plaid webhook are the two deliberate exceptions — so bolting
+on real auth later is a swap of one function, not a schema rework.
 
 ---
 
@@ -185,10 +190,14 @@ python3 -c "import secrets; print(secrets.token_urlsafe(32))"                   
 git config core.hooksPath .githooks   # blocks secrets and dumps from being committed
 ```
 
-`API_KEY` has no default and the API refuses every request without it — an auth
-gate that ships with a fallback is one somebody forgets to change. The same
-value goes in `frontend/.env.local` as `NEXT_PUBLIC_API_KEY` in step 4; if the
-two disagree the UI reports it rather than failing as a network error.
+`API_KEY` ships blank and an unset key **fails closed** — every request gets a
+503 telling you to set one, because a gate that ships with a working fallback is
+one somebody forgets to change. It gates every route except `/health` and the
+Plaid webhook (which verifies an ES256 signature instead). It is not user
+authentication — one key, one user, possession of a secret rather than an
+identity. The same value goes in `frontend/.env.local` as
+`NEXT_PUBLIC_API_KEY` in step 4; if the two disagree the UI reports it rather
+than failing as a network error.
 
 ### 2. Start Postgres + Redis, run migrations
 
@@ -221,9 +230,9 @@ Put the `API_KEY` from step 1 into `frontend/.env.local` as `NEXT_PUBLIC_API_KEY
 before starting the dev server — Next.js inlines it at build time, so a change
 needs a restart.
 
-Open <http://localhost:3000>. API docs at <http://localhost:8000/docs>. The docs
-page loads, but calls from it answer 401 without the key; use `curl -H
-"X-API-Key: …"` or the app itself.
+Open <http://localhost:3000>. API docs at <http://localhost:8000/docs> — the
+gate covers those too, so `/docs` and `/openapi.json` themselves answer 401
+without the key. Use `curl -H "X-API-Key: …"` or the app itself.
 
 ### Optional: link a real bank instead (Plaid Sandbox)
 
@@ -266,12 +275,12 @@ Full interactive docs: `/docs` (FastAPI/OpenAPI).
 
 ## Analytics: a tested star schema on dbt + Dagster
 
-Everything above is OLTP — every read is a point query scoped to one user. That
-shape has no answer for *analytical* questions: spend by category by month,
-holdings drift over time, fundamentals history for a ticker. The `analytics/`
-directory adds a dimensional model, a version-controlled transformation layer,
-and an orchestrator that runs it on a schedule and fails loudly when the data is
-wrong.
+Everything above is OLTP — every read is a point query scoped to the single
+seeded user. That shape has no answer for *analytical* questions: spend by
+category by month, holdings drift over time, fundamentals history for a
+ticker. The `analytics/` directory adds a dimensional model, a
+version-controlled transformation layer, and an orchestrator that runs it on a
+schedule and fails loudly when the data is wrong.
 
 It is **purely additive**. No existing model, service, router, migration or test
 was modified, and every new object lands in a new schema — never `public`.
@@ -302,7 +311,8 @@ inside one opaque `dbt build` box.
 
 ### The model
 
-Three fact grains, which is what makes it a star schema rather than a pile of
+Five fact tables across three grains — transaction, periodic snapshot, and
+annual period — which is what makes it a star schema rather than a pile of
 tables:
 
 | Fact | Grain |
@@ -386,8 +396,9 @@ every dependent if a test fails**. `run` followed by `test` would materialise
 the entire mart layer on top of known-bad data and only complain afterwards — by
 which point the marts are wrong, published, and green.
 
-Verified rather than assumed: breaking a staging model produced
-`PASS=235 ERROR=1 SKIP=34` with `fact_transactions` explicitly **skipped**.
+Verified rather than assumed: nulling a `not_null` column in `stg_transactions`
+produces `PASS=285 ERROR=1 SKIP=64 TOTAL=350`, with `fact_transactions` and its
+30 tests explicitly **skipped** rather than rebuilt on known-bad data.
 
 ### Data quality: dbt tests, and why not Great Expectations
 
@@ -441,9 +452,12 @@ broken on purpose and the build watched go red. That habit is load-bearing in
 this repo: the `.githooks` private-key rule silently never fired for its entire
 life, and a check that accepts everything passes any happy-path test.
 
-The sharpest demonstration: lower-casing the ticker in one staging model left
-**349 of 350 nodes green** and only the conformance test red. Nothing else in
-the suite can see a join that silently matches nothing.
+The sharpest demonstration: lower-casing the ticker in *one* staging model — a
+change no compiler or type checker can object to — makes the conformed join
+match zero rows. The build goes red at the staging layer
+(`PASS=332 ERROR=2 SKIP=16`) on the two `relationships` tests over `ticker`, and
+**skips the 16 downstream nodes** that would otherwise have published an empty
+research mart as a cheerful "no research available".
 
 ![dbt lineage graph: sources through staging and marts to the singular tests](docs/screenshots/analytics-dbt-lineage.png)
 
@@ -515,8 +529,10 @@ model's dependents the moment one of them fails.
 ## Status
 
 Five phases built and browser-verified end to end, including a production
-Plaid Link flow (OAuth institutions, webhook-driven sync). Auth is the one
-deliberately deferred piece — see "Why this exists" above for why that's a
+Plaid Link flow (OAuth institutions — that is the *bank's* consent redirect
+inside Plaid Link, not a login for this app — plus webhook-driven sync).
+**User authentication is the one deliberately deferred piece**: no login, no
+sessions, no second user — see "Why this exists" above for why that's a
 contained gap rather than a structural one. This repo is public and contains
-no real financial data, credentials, or account identifiers; the app itself
-has no auth layer, so if you run it, keep it on `localhost`.
+no real financial data, credentials, or account identifiers; since the only
+thing in front of the API is a single shared key, keep it on `localhost`.
