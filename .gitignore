@@ -97,6 +97,10 @@ analytics/dagster_home/*
 id_rsa*
 *.keystore
 
+# ---- Personal notes ----
+# Interview prep. Written for me, not for the repo.
+docs/interview-prep-notes.md
+
 # ---- Editor / OS / tooling ----
 .DS_Store
 *.log
